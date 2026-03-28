@@ -248,6 +248,35 @@ export default function RealtimeScreen() {
         </View>
       )}
 
+      {/* 前方路段色帶 */}
+      {sectionData?.stations?.length > 0 && (
+        <View style={styles.bandSection}>
+          <Text style={styles.bandTitle}>前方路段 ({sectionData.stations.length} 站)</Text>
+          <View style={styles.legendRow}>
+            <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.green }]} /><Text style={styles.legendText}>順暢</Text></View>
+            <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.yellow }]} /><Text style={styles.legendText}>車多</Text></View>
+            <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.red }]} /><Text style={styles.legendText}>壅塞</Text></View>
+          </View>
+          {sectionData.stations.map((station, idx) => {
+            const mainLanes = station.lanes.filter(l => !l.is_shoulder);
+            const avgSpd = mainLanes.length > 0
+              ? Math.round(mainLanes.reduce((s, l) => s + l.speed, 0) / mainLanes.length) : 0;
+            return (
+              <View key={idx} style={styles.bandRow}>
+                <Text style={styles.bandKm}>{station.mileage}K</Text>
+                <View style={styles.bandLanes}>
+                  {mainLanes.map((lane, i) => {
+                    const c = getLaneColor(lane.speed);
+                    return <View key={i} style={[styles.bandLane, { backgroundColor: c.bar }]} />;
+                  })}
+                </View>
+                <Text style={styles.bandSpeed}>{avgSpd}</Text>
+              </View>
+            );
+          })}
+        </View>
+      )}
+
       <Text style={styles.footer}>每 30 秒自動刷新 | 下拉手動刷新</Text>
     </ScrollView>
   );
@@ -303,5 +332,16 @@ const styles = StyleSheet.create({
   bnCard: { marginHorizontal: 16, marginBottom: 8, borderWidth: 0.5, borderColor: COLORS.red, borderRadius: 12, padding: 14, backgroundColor: 'rgba(226,75,74,0.08)' },
   bnText: { color: '#F09595', fontSize: 14, fontWeight: '500' },
   bnDetail: { color: COLORS.gray, fontSize: 12, marginTop: 4 },
+  bandSection: { paddingHorizontal: 16, marginTop: 16 },
+  bandTitle: { color: COLORS.dimGray, fontSize: 12, marginBottom: 8 },
+  legendRow: { flexDirection: 'row', gap: 16, marginBottom: 8 },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  legendDot: { width: 8, height: 8, borderRadius: 2 },
+  legendText: { color: COLORS.dimGray, fontSize: 10 },
+  bandRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 3, gap: 8 },
+  bandKm: { color: COLORS.dimGray, fontSize: 10, width: 40, textAlign: 'right' },
+  bandLanes: { flex: 1, flexDirection: 'row', gap: 2 },
+  bandLane: { flex: 1, height: 10, borderRadius: 2 },
+  bandSpeed: { color: COLORS.gray, fontSize: 10, width: 28, textAlign: 'right' },
   footer: { color: COLORS.dimGray, fontSize: 10, textAlign: 'center', padding: 20 },
 });
