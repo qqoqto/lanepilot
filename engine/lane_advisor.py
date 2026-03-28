@@ -18,7 +18,6 @@ v1.1 更新: 新增路肩開放判定與車道建議整合
 """
 
 import sys
-import gzip
 import json
 from datetime import datetime, time as dtime, timedelta
 from dataclasses import dataclass
@@ -148,43 +147,75 @@ def is_shoulder_open(road, direction, mileage, check_time=None):
 # 3. VD 資料擷取
 # ============================================================
 
-VD_LIVE_URL = "https://tisvcloud.freeway.gov.tw/history/motc20/VD.xml.gz"
+VD_LIVE_URL = "https://tisvcloud.freeway.gov.tw/history/motc20/VDLive.xml"
 
 def fetch_vd_live():
     try:
         import httpx
-        print("[INFO] 正在從 tisvcloud 抓取 VD 即時資料...")
+        print("[INFO] 正在從 tisvcloud 抓取 VDLive.xml ...")
         with httpx.Client(timeout=30) as client:
             resp = client.get(VD_LIVE_URL)
             resp.raise_for_status()
-            return gzip.decompress(resp.content).decode("utf-8")
+            size = len(resp.content)
+            print(f"[INFO] 下載完成: {size:,} bytes")
+            return resp.text
     except Exception as e:
         print(f"[WARN] 無法連線 tisvcloud: {e}")
         return None
 
 
+def _lane_names_for_count(n):
+    """根據車道數量動態命名"""
+    if n <= 2: return {0: "内側", 1: "外側"}
+    if n == 3: return {0: "内側", 1: "中線", 2: "外側"}
+    if n == 4: return {0: "内側", 1: "中內", 2: "中外", 3: "外側"}
+    if n == 5: return {0: "内側", 1: "中內", 2: "中線", 3: "中外", 4: "外側"}
+    # 6+: 前面正常命名, 多的叫路肩
+    names = {0: "内側", 1: "中內", 2: "中線", 3: "中外", 4: "外側"}
+    for i in range(5, n):
+        names[i] = "路肩"
+    return names
+
+
 def parse_vd_xml(xml_str, road_filter="1", dir_filter=None, km_min=60, km_max=100):
+    """
+    解析 VDLive.xml (即時路況資料標準 2.0)
+    
+    VDID 格式: VD-N{road}-{dir}-{mileage}-{type}-{subtype}[-{name}]
+    type: M/N = 主線 (我們要的), I = 入口匝道, O = 出口匝道, C = 連絡道, R = 服務區
+    
+    只保留主線 VD (type=M 或 type=N), 過濾掉匝道和服務區
+    """
     from lxml import etree
+    NS = {"ns": "http://traffic.transportdata.tw/standard/traffic/schema/"}
+
     root = etree.fromstring(xml_str.encode("utf-8"))
-    ns = {}
-    if root.tag.startswith("{"):
-        ns = {"ns": root.tag.split("}")[0].strip("{")}
+
+    update_el = root.find("ns:UpdateTime", NS)
+    if update_el is not None:
+        print(f"[INFO] 資料時間: {update_el.text}")
 
     stations = []
-    for vd in (root.findall(".//VDLive") or root.findall(".//ns:VDLive", ns)):
-        vd_id_el = vd.find("VDID") or vd.find("ns:VDID", ns)
-        if vd_id_el is None:
-            continue
-        vd_id = vd_id_el.text
+    for vd in root.findall(".//ns:VDLive", NS):
+        vd_id = vd.find("ns:VDID", NS).text
         parts = vd_id.split("-")
-        if len(parts) < 4:
+        if len(parts) < 5:
             continue
-        road_code = parts[1].replace("N", "")
-        direction = parts[2]
+
+        # 解析 VDID: VD-N1-N-86.120-M-LOOP
+        road_code = parts[1].lstrip("N")  # "N1" -> "1", "N1H" -> "1H", "N3" -> "3"
+        direction = parts[2]               # N or S
         try:
             mileage = float(parts[3])
         except ValueError:
             continue
+        vd_type = parts[4]                 # M, N, I, O, C, R
+
+        # 只保留主線 VD (M=主線偵測器, N=主線迴圈偵測器)
+        if vd_type not in ("M", "N"):
+            continue
+
+        # 篩選條件
         if road_filter and road_code != road_filter:
             continue
         if dir_filter and direction != dir_filter:
@@ -192,27 +223,53 @@ def parse_vd_xml(xml_str, road_filter="1", dir_filter=None, km_min=60, km_max=10
         if not (km_min <= mileage <= km_max):
             continue
 
-        status_el = vd.find("Status") or vd.find("ns:Status", ns)
+        status_el = vd.find("ns:Status", NS)
         status = int(status_el.text) if status_el is not None else -1
-        time_el = vd.find("DataCollectTime") or vd.find("ns:DataCollectTime", ns)
+        time_el = vd.find("ns:DataCollectTime", NS)
         data_time = time_el.text if time_el is not None else ""
 
-        lanes = []
-        lane_names = ["内側", "中線", "外線", "外側", "路肩"]
-        for lane_el in (vd.findall(".//Lane") or vd.findall(".//ns:Lane", ns)):
-            lid = int((lane_el.find("LaneID") or lane_el.find("ns:LaneID", ns)).text)
-            spd = float((lane_el.find("Speed") or lane_el.find("ns:Speed", ns)).text)
-            vol = int((lane_el.find("Volume") or lane_el.find("ns:Volume", ns)).text)
-            occ = float((lane_el.find("Occupancy") or lane_el.find("ns:Occupancy", ns)).text) / 100
-            name = lane_names[lid] if lid < len(lane_names) else f"車道{lid}"
-            lanes.append(LaneData(lid, name, spd, vol, occ, is_shoulder=(lid >= 4)))
+        # 解析車道
+        raw_lanes = []
+        for lane_el in vd.findall(".//ns:Lane", NS):
+            lid = int(lane_el.find("ns:LaneID", NS).text)
+            spd = float(lane_el.find("ns:Speed", NS).text)
+            occ_raw = float(lane_el.find("ns:Occupancy", NS).text)
+            occ = occ_raw / 100.0  # 整數百分比轉 0~1
 
-        if lanes:
-            stations.append(VDStation(
-                vd_id, road_code, direction, mileage,
-                f"國{road_code} {mileage}K {'北向' if direction=='N' else '南向'}",
-                lanes, data_time, status
-            ))
+            # Volume 從 Vehicles 加總
+            total_vol = 0
+            for v in lane_el.findall("ns:Vehicles/ns:Vehicle", NS):
+                vol_el = v.find("ns:Volume", NS)
+                if vol_el is not None:
+                    total_vol += int(vol_el.text)
+
+            raw_lanes.append((lid, spd, total_vol, occ))
+
+        if not raw_lanes:
+            continue
+
+        # 動態車道命名
+        n_lanes = len(raw_lanes)
+        name_map = _lane_names_for_count(n_lanes)
+
+        lanes = []
+        for idx, (lid, spd, vol, occ) in enumerate(sorted(raw_lanes, key=lambda x: x[0])):
+            name = name_map.get(idx, f"L{lid}")
+            is_shoulder = (name == "路肩")
+            lanes.append(LaneData(lid, name, spd, vol, occ, is_shoulder))
+
+        # 位置描述: 從 VDID 尾部取交流道名稱
+        loc_parts = vd_id.split("-")
+        loc_name = loc_parts[-1] if len(loc_parts) > 5 and not loc_parts[-1].isupper() else ""
+        desc = f"國{road_code} {mileage}K {'北' if direction=='N' else '南'}向"
+        if loc_name:
+            desc += f" ({loc_name})"
+
+        stations.append(VDStation(
+            vd_id, road_code, direction, mileage,
+            desc, lanes, data_time, status
+        ))
+
     stations.sort(key=lambda s: s.mileage, reverse=(dir_filter == "N"))
     return stations
 
@@ -266,16 +323,22 @@ def clean_lane_data(lanes, road="1", direction="N", mileage=0, check_time=None):
     sched = is_shoulder_open(road, direction, mileage, check_time)
 
     for lane in lanes:
-        if lane.speed <= 0 or lane.speed > 200:
+        # speed=0, volume=0, occupancy=0 -> 無資料 (設備異常或車道關閉), 丟棄
+        if lane.speed == 0 and lane.volume == 0 and lane.occupancy == 0:
             continue
+        # speed > 200 -> 設備異常
+        if lane.speed > 200:
+            continue
+        # speed=0 但 occupancy>0 -> 嚴重壅塞 (車停住了), 保留但設速度為 1
+        speed = lane.speed if lane.speed > 0 else 1
         occ = max(0, min(1, lane.occupancy))
 
         if lane.is_shoulder:
             if sched is None:
                 continue  # 路肩未開放 -> 丟棄
-            cleaned.append(LaneData(lane.lane_id, lane.lane_name, lane.speed, lane.volume, occ, True))
+            cleaned.append(LaneData(lane.lane_id, lane.lane_name, speed, lane.volume, occ, True))
         else:
-            cleaned.append(LaneData(lane.lane_id, lane.lane_name, lane.speed, lane.volume, occ, False))
+            cleaned.append(LaneData(lane.lane_id, lane.lane_name, speed, lane.volume, occ, False))
     return cleaned
 
 

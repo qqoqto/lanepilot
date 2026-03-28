@@ -28,15 +28,17 @@ def test_classify_speed():
 def test_clean_lane_data():
     lanes = [
         LaneData(0, "内側", 92, 12, 0.15),
-        LaneData(1, "中線", 0, 10, 0.20),    # speed=0 -> 丟棄
-        LaneData(2, "外線", 250, 8, 0.10),   # speed>200 -> 丟棄
-        LaneData(3, "外側", 78, 20, 1.5),     # occupancy>1 -> 修正為1
+        LaneData(1, "中線", 0, 0, 0),      # speed=0,vol=0,occ=0 -> 無資料, 丟棄
+        LaneData(2, "外線", 250, 8, 0.10),  # speed>200 -> 丟棄
+        LaneData(3, "外側", 78, 20, 1.5),   # occupancy>1 -> 修正為1
+        LaneData(4, "路肩", 0, 5, 0.30),    # speed=0 但 occ>0 -> 壅塞, 保留 (speed->1)
     ]
     cleaned = clean_lane_data(lanes)
-    assert len(cleaned) == 2
+    assert len(cleaned) == 3
     assert cleaned[0].speed == 92
     assert cleaned[1].speed == 78
     assert cleaned[1].occupancy == 1.0
+    assert cleaned[2].speed == 1   # 壅塞: speed 修正為 1
     print("  [PASS] clean_lane_data")
 
 
