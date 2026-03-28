@@ -122,9 +122,7 @@ async def vd_refresh_loop():
 async def lifespan(app: FastAPI):
     """應用啟動/關閉生命週期"""
     logger.info("LanePilot API 啟動中...")
-    # 啟動時先抓一次
-    await cache.refresh()
-    # 背景排程
+    # 不等第一次抓取完成, 直接啟動, 背景排程會處理
     task = asyncio.create_task(vd_refresh_loop())
     logger.info("背景 VD 資料排程已啟動 (每 60 秒)")
     yield
