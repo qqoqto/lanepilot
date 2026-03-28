@@ -1,0 +1,48 @@
+{
+  "version": "1.0",
+  "updated": "2026-03-28",
+  "source": "交通部高速公路局公告",
+  "note": "實際開放路肩時段、里程及速限請以現場標誌及號誌為準",
+  "schedules": [
+    {
+      "road": "1",
+      "direction": "N",
+      "km_start": 90.0,
+      "km_end": 83.0,
+      "time_start": "07:00",
+      "time_end": "09:00",
+      "weekdays": [0, 1, 2, 3, 4],
+      "speed_limit": 60,
+      "shoulder_type": 1,
+      "exit_name": "湖口交流道",
+      "note": "平日上午尖峰開放路肩"
+    },
+    {
+      "road": "1",
+      "direction": "S",
+      "km_start": 83.0,
+      "km_end": 90.0,
+      "time_start": "17:00",
+      "time_end": "19:00",
+      "weekdays": [0, 1, 2, 3, 4],
+      "speed_limit": 60,
+      "shoulder_type": 1,
+      "exit_name": "湖口交流道",
+      "note": "平日下午尖峰開放路肩"
+    },
+    {
+      "road": "1",
+      "direction": "N",
+      "km_start": 80.0,
+      "km_end": 69.0,
+      "time_start": "07:00",
+      "time_end": "09:00",
+      "weekdays": [0, 1, 2, 3, 4],
+      "speed_limit": 60,
+      "shoulder_type": 2,
+      "exit_name": "",
+      "note": "平日上午尖峰開放路肩"
+    }
+  ],
+  "holiday_overrides": []
+}
