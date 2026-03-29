@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { StyleSheet, Text, View, ScrollView, RefreshControl, TouchableOpacity } from 'react-native';
 import { API_BASE, COLORS, getLaneColor, timeAgo } from '../constants';
+import { useSettings } from '../SettingsContext';
 
 const ROADS = [
   { label: '國1', value: '1' },
@@ -75,19 +76,28 @@ function LaneCard({ lane, isBest }) {
   );
 }
 
-function AdviceBar({ advice }) {
+function AdviceBar({ advice, threshold }) {
   if (!advice) return null;
-  const isSwitch = advice.speed_diff >= 15;
+  const isSwitch = advice.speed_diff >= threshold;
+  // Re-generate advice text based on current threshold
+  let action = advice.action;
+  let message = advice.message;
+  if (advice.speed_diff < threshold) {
+    action = '維持目前車道';
+    message = `各車道速差僅 ${Math.round(advice.speed_diff)} km/h，低於門檻 ${threshold} km/h。切換車道效益不大，維持原車道即可。`;
+  }
   return (
     <View style={[styles.adviceBar, { backgroundColor: isSwitch ? COLORS.green : COLORS.card }]}>
-      <Text style={styles.adviceAction}>{advice.action}</Text>
-      <Text style={styles.adviceDetail}>{advice.message}</Text>
+      <Text style={styles.adviceAction}>{action}</Text>
+      <Text style={styles.adviceDetail}>{message}</Text>
+      <Text style={styles.thresholdHint}>靈敏度: {threshold} km/h</Text>
       {advice.shoulder_note ? <Text style={styles.shoulderNote}>{advice.shoulder_note}</Text> : null}
     </View>
   );
 }
 
 export default function RealtimeScreen() {
+  const { sensitivity } = useSettings();
   const [road, setRoad] = useState('1');
   const [dir, setDir] = useState('N');
   const [kmIdx, setKmIdx] = useState(DEFAULT_KM_IDX['1']);
@@ -201,7 +211,7 @@ export default function RealtimeScreen() {
       )}
 
       {/* 建議條 */}
-      {data?.advice && <AdviceBar advice={data.advice} />}
+      {data?.advice && <AdviceBar advice={data.advice} threshold={sensitivity} />}
 
       {/* 車道速度卡片 */}
       {data?.lanes && (
@@ -314,6 +324,7 @@ const styles = StyleSheet.create({
   adviceAction: { color: COLORS.white, fontSize: 16, fontWeight: '600' },
   adviceDetail: { color: 'rgba(255,255,255,0.8)', fontSize: 13, marginTop: 4 },
   shoulderNote: { color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 6, fontStyle: 'italic' },
+  thresholdHint: { color: 'rgba(255,255,255,0.4)', fontSize: 10, marginTop: 4 },
   sectionLabel: { color: COLORS.dimGray, fontSize: 12, marginLeft: 20, marginBottom: 8 },
   lanesGrid: { flexDirection: 'row', paddingHorizontal: 16, gap: 8, flexWrap: 'wrap' },
   laneCard: { flex: 1, minWidth: 70, borderRadius: 12, padding: 12, alignItems: 'center' },

@@ -1,6 +1,6 @@
-import { useState } from 'react';
 import { StyleSheet, Text, View, ScrollView, Switch, TouchableOpacity } from 'react-native';
 import { COLORS } from '../constants';
+import { useSettings } from '../SettingsContext';
 
 function SettingRow({ label, sub, right }) {
   return (
@@ -35,9 +35,9 @@ function SegmentControl({ options, selected, onSelect }) {
   return (
     <View style={styles.segCtrl}>
       {options.map(opt => (
-        <TouchableOpacity key={opt} style={[styles.segBtn, selected === opt && styles.segActive]}
-          onPress={() => onSelect(opt)}>
-          <Text style={[styles.segText, selected === opt && styles.segActiveText]}>{opt}</Text>
+        <TouchableOpacity key={opt.value} style={[styles.segBtn, selected === opt.value && styles.segActive]}
+          onPress={() => onSelect(opt.value)}>
+          <Text style={[styles.segText, selected === opt.value && styles.segActiveText]}>{opt.label}</Text>
         </TouchableOpacity>
       ))}
     </View>
@@ -45,11 +45,19 @@ function SegmentControl({ options, selected, onSelect }) {
 }
 
 export default function SettingsScreen() {
-  const [sensitivity, setSensitivity] = useState('15');
-  const [voice, setVoice] = useState(true);
-  const [commutePush, setCommutePush] = useState(true);
-  const [enroutePush, setEnroutePush] = useState(true);
-  const [bottleneckAlert, setBottleneckAlert] = useState(true);
+  const {
+    sensitivity, setSensitivity,
+    voice, setVoice,
+    commutePush, setCommutePush,
+    enroutePush, setEnroutePush,
+    bottleneckAlert, setBottleneckAlert,
+  } = useSettings();
+
+  const sensitivityOptions = [
+    { label: '10', value: 10 },
+    { label: '15', value: 15 },
+    { label: '20', value: 20 },
+  ];
 
   return (
     <ScrollView style={styles.scroll}>
@@ -58,8 +66,8 @@ export default function SettingsScreen() {
       {/* 車道建議 */}
       <Text style={styles.sectionTitle}>車道建議</Text>
       <View style={styles.group}>
-        <SettingRow label="建議靈敏度" sub="速差多少才提醒切換" right={
-          <SegmentControl options={['10', '15', '20']} selected={sensitivity} onSelect={setSensitivity} />
+        <SettingRow label="建議靈敏度" sub={`速差 >= ${sensitivity} km/h 才提醒切換`} right={
+          <SegmentControl options={sensitivityOptions} selected={sensitivity} onSelect={setSensitivity} />
         } />
         <SettingToggle label="語音播報" sub="自動唸出車道建議" value={voice} onToggle={setVoice} />
         <SettingValue label="語音語言" value="中文" accent />
@@ -106,8 +114,8 @@ const styles = StyleSheet.create({
   rowValue: { color: COLORS.gray, fontSize: 14 },
   segCtrl: { flexDirection: 'row', backgroundColor: COLORS.bg, borderRadius: 8, borderWidth: 0.5, borderColor: '#333', overflow: 'hidden' },
   segBtn: { paddingHorizontal: 14, paddingVertical: 6 },
-  segActive: { backgroundColor: COLORS.card },
+  segActive: { backgroundColor: COLORS.accent },
   segText: { color: COLORS.gray, fontSize: 12 },
-  segActiveText: { color: COLORS.white },
+  segActiveText: { color: '#04342C', fontWeight: '600' },
   credit: { color: COLORS.dimGray, fontSize: 11, textAlign: 'center', padding: 24, lineHeight: 18 },
 });

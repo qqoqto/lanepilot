@@ -1,6 +1,7 @@
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar, View, Text } from 'react-native';
+import { SettingsProvider } from './SettingsContext';
 
 import RealtimeScreen from './screens/RealtimeScreen';
 import SectionsScreen from './screens/SectionsScreen';
@@ -27,7 +28,7 @@ function TabIcon({ label, focused }) {
 
 export default function App() {
   return (
-    <>
+    <SettingsProvider>
       <StatusBar barStyle="light-content" />
       <NavigationContainer>
         <Tab.Navigator
@@ -54,6 +55,6 @@ export default function App() {
             options={{ tabBarIcon: ({ focused }) => <TabIcon label="設定" focused={focused} /> }} />
         </Tab.Navigator>
       </NavigationContainer>
-    </>
+    </SettingsProvider>
   );
 }
