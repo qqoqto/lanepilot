@@ -50,6 +50,56 @@ const DEFAULT_SEG = { '1': 3, '3': 3, '1H': 0 };  // 國1預設中壢-新竹
 
 const PREVIEW_COUNT = 10;
 
+function StationRow({ station }) {
+  const [open, setOpen] = useState(false);
+  const mainLanes = station.lanes.filter(l => !l.is_shoulder);
+  const avgSpeed = mainLanes.length > 0
+    ? Math.round(mainLanes.reduce((s, l) => s + l.speed, 0) / mainLanes.length) : 0;
+
+  return (
+    <View>
+      <TouchableOpacity style={styles.stationRow} onPress={() => setOpen(!open)} activeOpacity={0.7}>
+        <Text style={styles.stationKm}>{station.mileage}K</Text>
+        <View style={styles.laneBands}>
+          {mainLanes.map((lane, i) => {
+            const c = getLaneColor(lane.speed);
+            return <View key={i} style={[styles.laneBand, { backgroundColor: c.bar }]} />;
+          })}
+        </View>
+        <Text style={styles.stationSpeed}>{avgSpeed}</Text>
+        <Text style={styles.stationArrow}>{open ? '▲' : '▼'}</Text>
+      </TouchableOpacity>
+      {open && (
+        <View style={styles.laneDetail}>
+          {mainLanes.map((lane, i) => {
+            const c = getLaneColor(lane.speed);
+            return (
+              <View key={i} style={styles.laneDetailRow}>
+                <View style={[styles.laneDetailDot, { backgroundColor: c.bar }]} />
+                <Text style={styles.laneDetailName}>{lane.name}</Text>
+                <View style={[styles.laneDetailBar, { width: `${Math.min(lane.speed / 120 * 100, 100)}%`, backgroundColor: c.bar }]} />
+                <Text style={[styles.laneDetailSpeed, { color: c.bar }]}>{Math.round(lane.speed)}</Text>
+              </View>
+            );
+          })}
+          {station.lanes.filter(l => l.is_shoulder).map((lane, i) => {
+            const c = getLaneColor(lane.speed);
+            return (
+              <View key={`sh${i}`} style={styles.laneDetailRow}>
+                <View style={[styles.laneDetailDot, { backgroundColor: '#555' }]} />
+                <Text style={[styles.laneDetailName, { color: '#888' }]}>路肩{lane.shoulder_speed_limit ? ` 限${lane.shoulder_speed_limit}` : ''}</Text>
+                <View style={[styles.laneDetailBar, { width: `${Math.min(lane.speed / 120 * 100, 100)}%`, backgroundColor: '#555' }]} />
+                <Text style={[styles.laneDetailSpeed, { color: '#888' }]}>{Math.round(lane.speed)}</Text>
+              </View>
+            );
+          })}
+          <Text style={styles.laneDetailLoc}>{station.location}</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
 function BandSection({ stations }) {
   const [expanded, setExpanded] = useState(false);
   const total = stations.length;
@@ -73,23 +123,9 @@ function BandSection({ stations }) {
         <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: '#EF5350' }]} /><Text style={styles.legendText}>20-40</Text></View>
         <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: '#8B0000' }]} /><Text style={styles.legendText}>&lt;20</Text></View>
       </View>
-      {showStations.map((station, idx) => {
-        const mainLanes = station.lanes.filter(l => !l.is_shoulder);
-        const avgSpeed = mainLanes.length > 0
-          ? Math.round(mainLanes.reduce((s, l) => s + l.speed, 0) / mainLanes.length) : 0;
-        return (
-          <View key={idx} style={styles.stationRow}>
-            <Text style={styles.stationKm}>{station.mileage}K</Text>
-            <View style={styles.laneBands}>
-              {mainLanes.map((lane, i) => {
-                const c = getLaneColor(lane.speed);
-                return <View key={i} style={[styles.laneBand, { backgroundColor: c.bar }]} />;
-              })}
-            </View>
-            <Text style={styles.stationSpeed}>{avgSpeed}</Text>
-          </View>
-        );
-      })}
+      {showStations.map((station, idx) => (
+        <StationRow key={idx} station={station} />
+      ))}
       {hasMore && !expanded && (
         <TouchableOpacity style={styles.expandBar} onPress={() => setExpanded(true)}>
           <Text style={styles.expandBarText}>還有 {total - PREVIEW_COUNT} 站，點擊展開</Text>
@@ -287,7 +323,15 @@ const styles = StyleSheet.create({
   stationKm: { color: COLORS.dimGray, fontSize: 10, width: 40, textAlign: 'right' },
   laneBands: { flex: 1, flexDirection: 'row', gap: 2 },
   laneBand: { flex: 1, height: 10, borderRadius: 2 },
-  stationSpeed: { color: COLORS.gray, fontSize: 10, width: 28, textAlign: 'right' },
+  stationSpeed: { color: COLORS.gray, fontSize: 10, width: 24, textAlign: 'right' },
+  stationArrow: { color: COLORS.dimGray, fontSize: 8, width: 12, textAlign: 'center' },
+  laneDetail: { backgroundColor: '#1a1a1e', marginHorizontal: 4, marginBottom: 6, borderRadius: 8, padding: 10 },
+  laneDetailRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 4, gap: 6 },
+  laneDetailDot: { width: 6, height: 6, borderRadius: 3 },
+  laneDetailName: { color: COLORS.lightGray, fontSize: 11, width: 32 },
+  laneDetailBar: { height: 6, borderRadius: 3, minWidth: 4 },
+  laneDetailSpeed: { fontSize: 12, fontWeight: '600', width: 28, textAlign: 'right' },
+  laneDetailLoc: { color: COLORS.dimGray, fontSize: 10, marginTop: 4 },
   bnSectionTitle: { color: COLORS.dimGray, fontSize: 12, marginLeft: 20, marginTop: 8, marginBottom: 8 },
   bnCard: { marginHorizontal: 16, marginBottom: 8, borderWidth: 0.5, borderColor: COLORS.red, borderRadius: 12, padding: 14, backgroundColor: 'rgba(226,75,74,0.08)' },
   bnTitle: { color: '#F09595', fontSize: 14, fontWeight: '500' },
