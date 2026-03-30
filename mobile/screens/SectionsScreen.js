@@ -67,9 +67,11 @@ function BandSection({ stations }) {
         )}
       </View>
       <View style={styles.legendRow}>
-        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.green }]} /><Text style={styles.legendText}>順暢 &gt;80</Text></View>
-        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.yellow }]} /><Text style={styles.legendText}>車多 40-80</Text></View>
-        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.red }]} /><Text style={styles.legendText}>壅塞 &lt;40</Text></View>
+        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: '#1DB954' }]} /><Text style={styles.legendText}>&gt;80</Text></View>
+        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: '#66BB6A' }]} /><Text style={styles.legendText}>60-80</Text></View>
+        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: '#FFA726' }]} /><Text style={styles.legendText}>40-60</Text></View>
+        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: '#EF5350' }]} /><Text style={styles.legendText}>20-40</Text></View>
+        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: '#8B0000' }]} /><Text style={styles.legendText}>&lt;20</Text></View>
       </View>
       {showStations.map((station, idx) => {
         const mainLanes = station.lanes.filter(l => !l.is_shoulder);
