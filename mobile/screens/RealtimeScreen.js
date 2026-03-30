@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { StyleSheet, Text, View, ScrollView, RefreshControl, TouchableOpacity } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, RefreshControl, TouchableOpacity, Platform } from 'react-native';
 import { API_BASE, COLORS, getLaneColor, timeAgo } from '../constants';
 import { useSettings } from '../SettingsContext';
 
@@ -150,6 +150,41 @@ export default function RealtimeScreen() {
   const [countdown, setCountdown] = useState(30);
   const prevLanesRef = useRef({});
 
+  const [gpsMode, setGpsMode] = useState(false);
+  const [gpsData, setGpsData] = useState(null);
+  const [gpsLoading, setGpsLoading] = useState(false);
+
+  const fetchGPS = useCallback(async () => {
+    if (!navigator.geolocation) return;
+    setGpsLoading(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        try {
+          const resp = await fetch(
+            `${API_BASE}/api/v1/nearby?lat=${pos.coords.latitude}&lon=${pos.coords.longitude}`
+          );
+          if (resp.ok) {
+            const json = await resp.json();
+            setGpsData(json);
+            setLastUpdate(new Date().toISOString());
+            setCountdown(30);
+          }
+        } catch (e) { console.log('GPS fetch error', e); }
+        finally { setGpsLoading(false); }
+      },
+      (err) => { console.log('GPS error', err); setGpsLoading(false); },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }, []);
+
+  // GPS auto refresh
+  useEffect(() => {
+    if (!gpsMode) return;
+    fetchGPS();
+    const interval = setInterval(fetchGPS, 30000);
+    return () => clearInterval(interval);
+  }, [gpsMode, fetchGPS]);
+
   const kmPoints = KM_POINTS[road] || [];
   const currentPoint = kmPoints[kmIdx] || kmPoints[0];
   const km = currentPoint?.km || 88;
@@ -219,6 +254,23 @@ export default function RealtimeScreen() {
       style={styles.scroll}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchData(); }} tintColor={COLORS.green} />}
     >
+      {/* GPS 定位按鈕 */}
+      <View style={styles.gpsRow}>
+        <TouchableOpacity
+          style={[styles.gpsBtn, gpsMode && styles.gpsBtnActive]}
+          onPress={() => { setGpsMode(!gpsMode); if (!gpsMode) setGpsData(null); }}
+        >
+          <Text style={[styles.gpsBtnText, gpsMode && styles.gpsBtnTextActive]}>
+            {gpsLoading ? '定位中...' : gpsMode ? '● GPS 定位中' : '○ 開啟 GPS 定位'}
+          </Text>
+        </TouchableOpacity>
+        {gpsMode && gpsData?.nearest && (
+          <Text style={styles.gpsInfo}>
+            {gpsData.road} {gpsData.direction} {gpsData.your_km}K (距 {gpsData.nearest.distance_km}km)
+          </Text>
+        )}
+      </View>
+
       {/* 國道選擇 */}
       <View style={styles.pickerRow}>
         {ROADS.map(r => (
@@ -253,8 +305,17 @@ export default function RealtimeScreen() {
       {/* Header */}
       <View style={styles.header}>
         <View>
-          <Text style={styles.headerTitle}>國{road} {dir === 'N' ? '北向' : '南向'} {currentPoint?.label}</Text>
-          <Text style={styles.headerSub}>{data?.location || '載入中...'} | {km}K 附近</Text>
+          {gpsMode && gpsData ? (
+            <>
+              <Text style={styles.headerTitle}>{gpsData.road} {gpsData.direction}</Text>
+              <Text style={styles.headerSub}>{gpsData.your_km}K 附近 | 距國道 {gpsData.nearest?.distance_km}km</Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.headerTitle}>國{road} {dir === 'N' ? '北向' : '南向'} {currentPoint?.label}</Text>
+              <Text style={styles.headerSub}>{data?.location || '載入中...'} | {km}K 附近</Text>
+            </>
+          )}
         </View>
         <Text style={styles.updateText}>{lastUpdate ? `${countdown}s` : ''}</Text>
       </View>
@@ -280,6 +341,39 @@ export default function RealtimeScreen() {
                   prevSpeed={prevLanesRef.current[lane.name]} />
             ))}
           </View>
+        </View>
+      )}
+
+      {/* GPS 路段摘要 */}
+      {gpsMode && gpsData?.summary && (
+        <View style={styles.summaryRow}>
+          <View style={styles.summaryCard}>
+            <Text style={styles.summaryVal}>{gpsData.summary.est_minutes}</Text>
+            <Text style={styles.summaryLabel}>分鐘預估</Text>
+          </View>
+          <View style={styles.summaryCard}>
+            <Text style={[styles.summaryVal, { color: gpsData.summary.bottleneck_count > 0 ? COLORS.yellow : COLORS.green }]}>
+              {gpsData.summary.bottleneck_count}
+            </Text>
+            <Text style={styles.summaryLabel}>處瓶頸</Text>
+          </View>
+          <View style={styles.summaryCard}>
+            <Text style={styles.summaryVal}>{gpsData.summary.avg_speed}</Text>
+            <Text style={styles.summaryLabel}>km/h 均速</Text>
+          </View>
+        </View>
+      )}
+
+      {/* GPS 瓶頸 */}
+      {gpsMode && gpsData?.bottlenecks?.length > 0 && (
+        <View>
+          <Text style={styles.bnTitle}>前方瓶頸</Text>
+          {gpsData.bottlenecks.map((bn, idx) => (
+            <View key={idx} style={styles.bnCard}>
+              <Text style={styles.bnText}>{bn.start} → {bn.end}</Text>
+              <Text style={styles.bnDetail}>{bn.worst_lane} 速降 {Math.round(bn.speed_drop)} km/h → {Math.round(bn.worst_speed)} km/h</Text>
+            </View>
+          ))}
         </View>
       )}
 
@@ -425,5 +519,11 @@ const styles = StyleSheet.create({
   bandLanes: { flex: 1, flexDirection: 'row', gap: 2 },
   bandLane: { flex: 1, height: 10, borderRadius: 2 },
   bandSpeed: { color: COLORS.gray, fontSize: 10, width: 28, textAlign: 'right' },
+  gpsRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4, gap: 10 },
+  gpsBtn: { backgroundColor: COLORS.card, borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7, borderWidth: 1, borderColor: '#333' },
+  gpsBtnActive: { backgroundColor: '#0B4D3A', borderColor: COLORS.green },
+  gpsBtnText: { color: COLORS.gray, fontSize: 12 },
+  gpsBtnTextActive: { color: COLORS.green, fontWeight: '500' },
+  gpsInfo: { color: COLORS.dimGray, fontSize: 11, flex: 1 },
   footer: { color: COLORS.dimGray, fontSize: 10, textAlign: 'center', padding: 20 },
 });
