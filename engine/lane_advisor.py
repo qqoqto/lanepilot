@@ -333,6 +333,98 @@ def parse_vd_json(data, road_filter="1", dir_filter=None, km_min=0, km_max=999):
     stations.sort(key=lambda s: s.mileage, reverse=(dir_filter == "N"))
     return stations
 
+
+# ============================================================
+# 3c. VD 靜態資料 (座標索引, GPS 定位用)
+# ============================================================
+
+def fetch_vd_static_tdx(client_id=None, client_secret=None):
+    """從 TDX 抓取國道 VD 靜態資料 (含經緯度)"""
+    import os
+    cid = client_id or os.environ.get("TDX_CLIENT_ID", "")
+    csec = client_secret or os.environ.get("TDX_CLIENT_SECRET", "")
+    if not cid or not csec:
+        print("[WARN] TDX 金鑰未設定, 無法抓 VD 靜態資料")
+        return None
+    try:
+        import httpx
+        token = _get_tdx_token(cid, csec)
+        headers = {"Authorization": f"Bearer {token}"}
+        timeout = httpx.Timeout(connect=30, read=60, write=30, pool=30)
+        print("[INFO] 從 TDX 抓取 VD 靜態資料 (含座標)...")
+        with httpx.Client(timeout=timeout, verify=False) as client:
+            resp = client.get(
+                "https://tdx.transportdata.tw/api/basic/v2/Road/Traffic/VD/Freeway?$format=JSON",
+                headers=headers
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            vds = data.get("VDs", [])
+            print(f"[INFO] VD 靜態資料: {len(vds)} 筆")
+            return vds
+    except Exception as e:
+        print(f"[WARN] VD 靜態資料抓取失敗: {e}")
+        return None
+
+
+import math
+
+def _haversine(lat1, lon1, lat2, lon2):
+    """計算兩點經緯度距離 (公里)"""
+    R = 6371
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = math.sin(dlat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon/2)**2
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+
+
+class VDLocationIndex:
+    """VD 站座標索引, 用 GPS 找最近的 VD 站"""
+
+    def __init__(self):
+        self.stations = []
+
+    def build(self, vd_static_list):
+        self.stations = []
+        for vd in vd_static_list:
+            vdid = vd.get("VDID", "")
+            lat = vd.get("PositionLat", 0)
+            lon = vd.get("PositionLon", 0)
+            if not lat or not lon:
+                continue
+            parts = vdid.split("-")
+            if len(parts) < 5:
+                continue
+            road_code = parts[1].lstrip("N")
+            direction = parts[2]
+            try:
+                mileage = float(parts[3])
+            except ValueError:
+                continue
+            vd_type = parts[4]
+            if vd_type not in ("M", "N"):
+                continue
+            road_name = vd.get("RoadName", f"國{road_code}")
+            self.stations.append((vdid, road_code, direction, mileage, lat, lon, road_name))
+        print(f"[INFO] VD 座標索引建立完成: {len(self.stations)} 站")
+
+    def find_nearby_road(self, lat, lon):
+        if not self.stations:
+            return None
+        best = None
+        best_dist = float("inf")
+        for vdid, road, direction, mileage, vlat, vlon, road_name in self.stations:
+            dist = _haversine(lat, lon, vlat, vlon)
+            if dist < best_dist:
+                best_dist = dist
+                best = {
+                    "road": road, "direction": direction, "mileage": mileage,
+                    "road_name": road_name, "distance_km": round(dist, 2),
+                    "lat": vlat, "lon": vlon
+                }
+        return best
+
+
 def _lane_names_for_count(n):
     """根據車道數量動態命名"""
     if n <= 2: return {0: "内側", 1: "外側"}

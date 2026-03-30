@@ -27,7 +27,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from engine.lane_advisor import (
     fetch_vd_live, parse_vd_xml, process_station, detect_bottlenecks,
     to_api_response, is_shoulder_open, VDStation,
-    fetch_vd_tdx, parse_vd_json
+    fetch_vd_tdx, parse_vd_json,
+    fetch_vd_static_tdx, VDLocationIndex
 )
 
 logger = logging.getLogger("lanepilot")
@@ -48,6 +49,7 @@ class VDCache:
         self.last_error: str = ""
         self.data_source: str = ""
         self._lock = asyncio.Lock()
+        self.location_index = VDLocationIndex()
 
     async def refresh(self):
         """抓取最新 VD 資料並更新快取 (優先 TDX JSON, fallback tisvcloud XML)"""
@@ -97,6 +99,12 @@ class VDCache:
 
                 total = sum(len(v) for v in self.stations.values())
                 logger.info(f"VD 快取更新完成: {total} 站, 第 {self.update_count} 次")
+
+                # 首次建立座標索引 (GPS 定位用)
+                if not self.location_index.stations:
+                    vd_static = await loop.run_in_executor(None, fetch_vd_static_tdx)
+                    if vd_static:
+                        self.location_index.build(vd_static)
                 return True
 
             except Exception as e:
@@ -335,5 +343,72 @@ def bottlenecks(
             "worst_lane": bn.worst_lane,
             "worst_speed": bn.worst_speed
         } for bn in bns],
+        "data_time": cache.last_update.isoformat()
+    }
+
+
+@app.get("/api/v1/nearby")
+def nearby(
+    lat: float = Query(..., description="緯度"),
+    lon: float = Query(..., description="經度"),
+    range_km: float = Query(20, description="前後公里數")
+):
+    """
+    GPS 定位: 根據經緯度找最近的國道路段, 回傳前後路況
+
+    GET /api/v1/nearby?lat=24.83&lon=120.94
+    """
+    if cache.last_update is None:
+        raise HTTPException(503, "資料尚未載入")
+
+    if not cache.location_index.stations:
+        raise HTTPException(503, "座標索引尚未建立, 請稍候")
+
+    nearest = cache.location_index.find_nearby_road(lat, lon)
+    if not nearest:
+        raise HTTPException(404, "找不到附近的國道 VD 站")
+
+    road = nearest["road"]
+    direction = nearest["direction"]
+    mileage = nearest["mileage"]
+
+    km_min = max(0, mileage - range_km)
+    km_max = mileage + range_km
+    stations = cache.get_stations(road, direction, km_min, km_max)
+
+    now = datetime.now()
+    results = []
+    for s_ in stations:
+        advice = process_station(s_, now)
+        results.append(to_api_response(s_, advice))
+
+    bottlenecks = detect_bottlenecks(stations)
+    bn_list = [{
+        "start": bn.start_station, "end": bn.end_station,
+        "start_km": bn.start_km, "end_km": bn.end_km,
+        "speed_drop": bn.speed_drop, "worst_lane": bn.worst_lane,
+        "worst_speed": bn.worst_speed
+    } for bn in bottlenecks]
+
+    main_speeds = [l.speed for s_ in stations for l in s_.lanes if not l.is_shoulder and l.speed > 0]
+    avg_speed = sum(main_speeds) / len(main_speeds) if main_speeds else 0
+    dist = abs(stations[0].mileage - stations[-1].mileage) if len(stations) > 1 else 0
+    est_time = (dist / avg_speed * 60) if avg_speed > 0 else 0
+
+    return {
+        "nearest": nearest,
+        "road": nearest["road_name"],
+        "direction": "北向" if direction == "N" else "南向",
+        "your_km": round(mileage, 1),
+        "range": f"{round(km_min, 1)}K ~ {round(km_max, 1)}K",
+        "summary": {
+            "station_count": len(results),
+            "distance_km": round(dist, 1),
+            "avg_speed": round(avg_speed),
+            "est_minutes": round(est_time),
+            "bottleneck_count": len(bn_list)
+        },
+        "bottlenecks": bn_list,
+        "stations": results,
         "data_time": cache.last_update.isoformat()
     }
