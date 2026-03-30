@@ -177,6 +177,162 @@ def fetch_vd_live(max_retries=3):
     return None
 
 
+
+# ============================================================
+# 3b. TDX API 資料擷取 (JSON, 適用雲端部署)
+# ============================================================
+
+TDX_AUTH_URL = "https://tdx.transportdata.tw/auth/realms/TDXConnect/protocol/openid-connect/token"
+TDX_VD_URL = "https://tdx.transportdata.tw/api/basic/v2/Road/Traffic/Live/VD/Freeway"
+
+_tdx_token_cache = {"token": None, "expires": 0}
+
+def _get_tdx_token(client_id, client_secret):
+    """取得 TDX Access Token (快取 1 小時)"""
+    import time as _time
+    if _tdx_token_cache["token"] and _time.time() < _tdx_token_cache["expires"]:
+        return _tdx_token_cache["token"]
+
+    import httpx
+    resp = httpx.post(TDX_AUTH_URL, data={
+        "grant_type": "client_credentials",
+        "client_id": client_id,
+        "client_secret": client_secret,
+    }, verify=False)
+    resp.raise_for_status()
+    token = resp.json()["access_token"]
+    _tdx_token_cache["token"] = token
+    _tdx_token_cache["expires"] = _time.time() + 3500  # 快取約 1 小時
+    print(f"[INFO] TDX token 取得成功")
+    return token
+
+
+def fetch_vd_tdx(client_id=None, client_secret=None):
+    """從 TDX API 抓取國道 VD 即時資料 (JSON 格式)"""
+    import os
+    cid = client_id or os.environ.get("TDX_CLIENT_ID", "")
+    csec = client_secret or os.environ.get("TDX_CLIENT_SECRET", "")
+    if not cid or not csec:
+        print("[WARN] TDX_CLIENT_ID 或 TDX_CLIENT_SECRET 未設定")
+        return None
+
+    try:
+        import httpx
+        token = _get_tdx_token(cid, csec)
+        headers = {"Authorization": f"Bearer {token}"}
+        timeout = httpx.Timeout(connect=30, read=60, write=30, pool=30)
+
+        print("[INFO] 從 TDX API 抓取國道 VD 即時資料...")
+        with httpx.Client(timeout=timeout, verify=False) as client:
+            resp = client.get(
+                f"{TDX_VD_URL}?$format=JSON",
+                headers=headers
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            vd_lives = data.get("VDLives", [])
+            print(f"[INFO] TDX 下載完成: {len(vd_lives)} 筆 VD 資料")
+            return data
+    except Exception as e:
+        print(f"[WARN] TDX API 失敗: {e}")
+        return None
+
+
+def parse_vd_json(data, road_filter="1", dir_filter=None, km_min=0, km_max=999):
+    """
+    解析 TDX VD JSON 資料, 輸出跟 parse_vd_xml 相同的 VDStation 列表
+    
+    TDX JSON 結構:
+    {
+      "VDLives": [
+        {
+          "VDID": "VD-N1-N-85.010-M-01",
+          "LinkFlows": [
+            {
+              "Lanes": [
+                {"LaneID": 0, "Speed": 95.0, "Occupancy": 15.0, "Vehicles": [...]}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+    """
+    vd_lives = data.get("VDLives", [])
+    update_time = data.get("SrcUpdateTime", "")
+    if update_time:
+        print(f"[INFO] TDX 資料時間: {update_time}")
+
+    stations = []
+    for vd in vd_lives:
+        vd_id = vd.get("VDID", "")
+        parts = vd_id.split("-")
+        if len(parts) < 5:
+            continue
+
+        road_code = parts[1].lstrip("N")  # "N1" -> "1", "N1H" -> "1H", "N3" -> "3"
+        direction = parts[2]               # N or S
+        try:
+            mileage = float(parts[3])
+        except ValueError:
+            continue
+        vd_type = parts[4]                 # M, N, I, O, C, R
+
+        # 只保留主線 VD
+        if vd_type not in ("M", "N"):
+            continue
+
+        if road_filter and road_code != road_filter:
+            continue
+        if dir_filter and direction != dir_filter:
+            continue
+        if not (km_min <= mileage <= km_max):
+            continue
+
+        # 解析車道資料 (從 LinkFlows 裡取)
+        raw_lanes = []
+        for link_flow in vd.get("LinkFlows", []):
+            for lane in link_flow.get("Lanes", []):
+                lid = lane.get("LaneID", 0)
+                spd = lane.get("Speed", 0.0)
+                occ_raw = lane.get("Occupancy", 0.0)
+                occ = occ_raw / 100.0  # 整數百分比轉 0~1
+
+                # Volume 從 Vehicles 加總
+                total_vol = 0
+                for v in lane.get("Vehicles", []):
+                    total_vol += v.get("Volume", 0)
+
+                raw_lanes.append((lid, spd, total_vol, occ))
+
+        if not raw_lanes:
+            continue
+
+        # 動態車道命名
+        n_lanes = len(raw_lanes)
+        name_map = _lane_names_for_count(n_lanes)
+
+        lanes = []
+        for idx, (lid, spd, vol, occ) in enumerate(sorted(raw_lanes, key=lambda x: x[0])):
+            name = name_map.get(idx, f"L{lid}")
+            is_shoulder = (name == "路肩")
+            lanes.append(LaneData(lid, name, spd, vol, occ, is_shoulder))
+
+        # 位置描述
+        loc_parts = vd_id.split("-")
+        loc_name = loc_parts[-1] if len(loc_parts) > 5 and not loc_parts[-1].isupper() else ""
+        desc = f"國{road_code} {mileage}K {'北' if direction=='N' else '南'}向"
+        if loc_name:
+            desc += f" ({loc_name})"
+
+        stations.append(VDStation(
+            vd_id, road_code, direction, mileage,
+            desc, lanes, update_time, 0
+        ))
+
+    stations.sort(key=lambda s: s.mileage, reverse=(dir_filter == "N"))
+    return stations
+
 def _lane_names_for_count(n):
     """根據車道數量動態命名"""
     if n <= 2: return {0: "内側", 1: "外側"}

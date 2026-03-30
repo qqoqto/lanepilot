@@ -26,7 +26,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from engine.lane_advisor import (
     fetch_vd_live, parse_vd_xml, process_station, detect_bottlenecks,
-    to_api_response, is_shoulder_open, VDStation
+    to_api_response, is_shoulder_open, VDStation,
+    fetch_vd_tdx, parse_vd_json
 )
 
 logger = logging.getLogger("lanepilot")
@@ -45,34 +46,49 @@ class VDCache:
         self.last_update: datetime = None
         self.update_count: int = 0
         self.last_error: str = ""
+        self.data_source: str = ""
         self._lock = asyncio.Lock()
 
     async def refresh(self):
-        """抓取最新 VD 資料並更新快取"""
+        """抓取最新 VD 資料並更新快取 (優先 TDX JSON, fallback tisvcloud XML)"""
         async with self._lock:
             try:
-                # fetch_vd_live 是同步的, 用 run_in_executor 避免阻塞
                 loop = asyncio.get_event_loop()
-                xml_str = await loop.run_in_executor(None, fetch_vd_live)
+                tdx_data = None
+                xml_str = None
 
-                if xml_str is None:
-                    self.last_error = "無法連線 tisvcloud"
+                # 優先使用 TDX API (JSON, 雲端可用)
+                tdx_data = await loop.run_in_executor(None, fetch_vd_tdx)
+
+                # TDX 失敗則 fallback 到 tisvcloud (本地可用)
+                if tdx_data is None:
+                    logger.info("TDX 不可用, fallback 到 tisvcloud XML")
+                    xml_str = await loop.run_in_executor(None, fetch_vd_live)
+
+                if tdx_data is None and xml_str is None:
+                    self.last_error = "TDX 和 tisvcloud 都無法連線"
                     logger.warning("VD 資料抓取失敗")
                     return False
 
-                self.raw_xml = xml_str
                 self.last_update = datetime.now()
                 self.update_count += 1
                 self.last_error = ""
+                self.data_source = "TDX" if tdx_data else "tisvcloud"
 
                 # 預解析常用路段 (國1 全線)
                 for road in ["1", "1H", "3"]:
                     for direction in ["N", "S"]:
                         key = (road, direction)
-                        stations = parse_vd_xml(
-                            xml_str, road_filter=road, dir_filter=direction,
-                            km_min=0, km_max=999
-                        )
+                        if tdx_data:
+                            stations = parse_vd_json(
+                                tdx_data, road_filter=road, dir_filter=direction,
+                                km_min=0, km_max=999
+                            )
+                        else:
+                            stations = parse_vd_xml(
+                                xml_str, road_filter=road, dir_filter=direction,
+                                km_min=0, km_max=999
+                            )
                         # 處理每站的評分
                         now = datetime.now()
                         for s in stations:
@@ -175,7 +191,8 @@ def system_status():
             {"road": k[0], "direction": k[1], "stations": len(v)}
             for k, v in cache.stations.items() if v
         ],
-        "last_error": cache.last_error or None
+        "last_error": cache.last_error or None,
+        "data_source": cache.data_source or "unknown"
     }
 
 
