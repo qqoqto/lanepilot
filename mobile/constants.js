@@ -1,5 +1,5 @@
 // API 設定
-export const API_BASE = 'http://localhost:8000';
+export const API_BASE = 'https://lanepilot-production.up.railway.app';
 
 // 色彩常數
 export const COLORS = {
