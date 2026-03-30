@@ -23,9 +23,11 @@ export const COLORS = {
 };
 
 export function getLaneColor(speed) {
-  if (speed > 80) return { bg: COLORS.greenBg, text: COLORS.greenText, bar: COLORS.green };
-  if (speed >= 40) return { bg: COLORS.yellowBg, text: COLORS.yellowText, bar: COLORS.yellow };
-  return { bg: COLORS.redBg, text: COLORS.redText, bar: COLORS.red };
+  if (speed > 80) return { bg: '#0a4d3a', text: '#7eedc8', bar: '#1DB954', level: '順暢' };
+  if (speed > 60) return { bg: '#2a4a2a', text: '#b5e6a3', bar: '#66BB6A', level: '略慢' };
+  if (speed > 40) return { bg: '#4a3a0a', text: '#ffd080', bar: '#FFA726', level: '車多' };
+  if (speed > 20) return { bg: '#4a1a1a', text: '#ff9a9a', bar: '#EF5350', level: '壅塞' };
+  return { bg: '#3a0a0a', text: '#ff7070', bar: '#8B0000', level: '嚴重壅塞' };
 }
 
 export function timeAgo(isoString) {
