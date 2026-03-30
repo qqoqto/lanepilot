@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { StyleSheet, Text, View, ScrollView, RefreshControl, TouchableOpacity } from 'react-native';
 import { API_BASE, COLORS, getLaneColor, timeAgo } from '../constants';
 import { useSettings } from '../SettingsContext';
@@ -61,8 +61,17 @@ const KM_POINTS = {
 
 const DEFAULT_KM_IDX = { '1': 7, '3': 4, '1H': 1 }; // 國1預設湖口, 國3預設關西, 國1H預設堤頂
 
-function LaneCard({ lane, isBest }) {
+function TrendArrow({ speed, prevSpeed }) {
+  if (prevSpeed === undefined || prevSpeed === null) return null;
+  const diff = speed - prevSpeed;
+  if (diff > 3) return <Text style={styles.trendUp}>↑</Text>;
+  if (diff < -3) return <Text style={styles.trendDown}>↓</Text>;
+  return <Text style={styles.trendFlat}>→</Text>;
+}
+
+function LaneCard({ lane, isBest, prevSpeed }) {
   const c = getLaneColor(lane.speed);
+  const isStuck = lane.speed <= 1;
   return (
     <View style={[styles.laneCard, { backgroundColor: c.bg }]}>
       {isBest && <View style={styles.bestBadge}><Text style={styles.bestBadgeText}>最快</Text></View>}
@@ -70,8 +79,11 @@ function LaneCard({ lane, isBest }) {
       <Text style={[styles.laneName, { color: c.text }]}>
         {lane.name}{lane.is_shoulder && lane.shoulder_speed_limit ? ` 限${lane.shoulder_speed_limit}` : ''}
       </Text>
-      <Text style={styles.laneSpeed}>{Math.round(lane.speed)}</Text>
-      <Text style={[styles.laneUnit, { color: c.text }]}>km/h</Text>
+      <View style={styles.speedRow}>
+        <Text style={styles.laneSpeed}>{isStuck ? '!' : Math.round(lane.speed)}</Text>
+        <TrendArrow speed={lane.speed} prevSpeed={prevSpeed} />
+      </View>
+      <Text style={[styles.laneUnit, { color: c.text }]}>{isStuck ? '停住了' : 'km/h'}</Text>
     </View>
   );
 }
@@ -135,6 +147,8 @@ export default function RealtimeScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
+  const [countdown, setCountdown] = useState(30);
+  const prevLanesRef = useRef({});
 
   const kmPoints = KM_POINTS[road] || [];
   const currentPoint = kmPoints[kmIdx] || kmPoints[0];
@@ -147,8 +161,15 @@ export default function RealtimeScreen() {
       const resp = await fetch(`${API_BASE}/api/v1/lanes/realtime?road=${road}&dir=${dir}&km=${km}`);
       if (resp.ok) {
         const json = await resp.json();
+        // Track previous speeds for trend arrows
+        if (data?.lanes) {
+          const prev = {};
+          data.lanes.forEach(l => { prev[l.name] = l.speed; });
+          prevLanesRef.current = prev;
+        }
         setData(json);
         setLastUpdate(new Date().toISOString());
+        setCountdown(30);
       } else {
         const err = await resp.json().catch(() => ({}));
         if (!data) setError(err.detail || `HTTP ${resp.status}`);
@@ -175,6 +196,14 @@ export default function RealtimeScreen() {
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
   }, [fetchData]);
+
+  // Countdown timer
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCountdown(prev => prev > 0 ? prev - 1 : 0);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const switchRoad = (newRoad) => {
     setError(null);
@@ -227,7 +256,7 @@ export default function RealtimeScreen() {
           <Text style={styles.headerTitle}>國{road} {dir === 'N' ? '北向' : '南向'} {currentPoint?.label}</Text>
           <Text style={styles.headerSub}>{data?.location || '載入中...'} | {km}K 附近</Text>
         </View>
-        <Text style={styles.updateText}>{lastUpdate ? timeAgo(lastUpdate) + '更新' : ''}</Text>
+        <Text style={styles.updateText}>{lastUpdate ? `${countdown}s` : ''}</Text>
       </View>
 
       {loading && <Text style={styles.loadingText}>正在載入即時資料...</Text>}
@@ -247,7 +276,8 @@ export default function RealtimeScreen() {
           <Text style={styles.sectionLabel}>各車道即時速度</Text>
           <View style={styles.lanesGrid}>
             {data.lanes.map((lane, idx) => (
-              <LaneCard key={idx} lane={lane} isBest={bestLane && lane.name === bestLane.name && !lane.is_shoulder} />
+              <LaneCard key={idx} lane={lane} isBest={bestLane && lane.name === bestLane.name && !lane.is_shoulder}
+                  prevSpeed={prevLanesRef.current[lane.name]} />
             ))}
           </View>
         </View>
@@ -366,7 +396,11 @@ const styles = StyleSheet.create({
   lanesGrid: { flexDirection: 'row', paddingHorizontal: 16, gap: 8, flexWrap: 'wrap' },
   laneCard: { flex: 1, minWidth: 70, borderRadius: 12, padding: 12, alignItems: 'center' },
   laneName: { fontSize: 12, marginBottom: 6 },
+  speedRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   laneSpeed: { color: COLORS.white, fontSize: 28, fontWeight: '600' },
+  trendUp: { color: '#5DFFC1', fontSize: 18, fontWeight: '700' },
+  trendDown: { color: '#FF6B6B', fontSize: 18, fontWeight: '700' },
+  trendFlat: { color: '#888888', fontSize: 14 },
   laneUnit: { fontSize: 11, marginTop: 2 },
   bestBadge: { backgroundColor: '#5DCAA5', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2, marginBottom: 4 },
   bestBadgeText: { color: '#04342C', fontSize: 10, fontWeight: '600' },
