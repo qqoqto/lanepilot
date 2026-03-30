@@ -162,7 +162,7 @@ def fetch_vd_live(max_retries=3):
     for attempt in range(1, max_retries + 1):
         try:
             print(f"[INFO] 抓取 VDLive.xml ... (第 {attempt} 次)")
-            with httpx.Client(timeout=timeout) as client:
+            with httpx.Client(timeout=timeout, verify=False) as client:
                 resp = client.get(VD_LIVE_URL)
                 resp.raise_for_status()
                 size = len(resp.content)

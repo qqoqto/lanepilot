@@ -48,6 +48,55 @@ const SEGMENTS = {
 // 各國道預設選擇的路段 index
 const DEFAULT_SEG = { '1': 3, '3': 3, '1H': 0 };  // 國1預設中壢-新竹
 
+const PREVIEW_COUNT = 10;
+
+function BandSection({ stations }) {
+  const [expanded, setExpanded] = useState(false);
+  const total = stations.length;
+  const showStations = expanded ? stations : stations.slice(0, PREVIEW_COUNT);
+  const hasMore = total > PREVIEW_COUNT;
+
+  return (
+    <View style={styles.bandSection}>
+      <View style={styles.bandHeader}>
+        <Text style={styles.bandTitle}>各車道速度色帶 ({total} 站)</Text>
+        {hasMore && (
+          <TouchableOpacity onPress={() => setExpanded(!expanded)}>
+            <Text style={styles.expandBtn}>{expanded ? '收合' : `展開全部`}</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+      <View style={styles.legendRow}>
+        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.green }]} /><Text style={styles.legendText}>順暢 &gt;80</Text></View>
+        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.yellow }]} /><Text style={styles.legendText}>車多 40-80</Text></View>
+        <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.red }]} /><Text style={styles.legendText}>壅塞 &lt;40</Text></View>
+      </View>
+      {showStations.map((station, idx) => {
+        const mainLanes = station.lanes.filter(l => !l.is_shoulder);
+        const avgSpeed = mainLanes.length > 0
+          ? Math.round(mainLanes.reduce((s, l) => s + l.speed, 0) / mainLanes.length) : 0;
+        return (
+          <View key={idx} style={styles.stationRow}>
+            <Text style={styles.stationKm}>{station.mileage}K</Text>
+            <View style={styles.laneBands}>
+              {mainLanes.map((lane, i) => {
+                const c = getLaneColor(lane.speed);
+                return <View key={i} style={[styles.laneBand, { backgroundColor: c.bar }]} />;
+              })}
+            </View>
+            <Text style={styles.stationSpeed}>{avgSpeed}</Text>
+          </View>
+        );
+      })}
+      {hasMore && !expanded && (
+        <TouchableOpacity style={styles.expandBar} onPress={() => setExpanded(true)}>
+          <Text style={styles.expandBarText}>還有 {total - PREVIEW_COUNT} 站，點擊展開</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
 export default function SectionsScreen() {
   const [road, setRoad] = useState('1');
   const [dir, setDir] = useState('N');
@@ -168,34 +217,9 @@ export default function SectionsScreen() {
         </View>
       )}
 
-      {/* 多車道色帶 */}
+      {/* 多車道色帶 (可收合) */}
       {data?.stations && (
-        <View style={styles.bandSection}>
-          <Text style={styles.bandTitle}>各車道速度色帶</Text>
-          <View style={styles.legendRow}>
-            <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.green }]} /><Text style={styles.legendText}>順暢 &gt;80</Text></View>
-            <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.yellow }]} /><Text style={styles.legendText}>車多 40-80</Text></View>
-            <View style={styles.legendItem}><View style={[styles.legendDot, { backgroundColor: COLORS.red }]} /><Text style={styles.legendText}>壅塞 &lt;40</Text></View>
-          </View>
-          {data.stations.map((station, idx) => {
-            const mainLanes = station.lanes.filter(l => !l.is_shoulder);
-            const avgSpeed = mainLanes.length > 0
-              ? Math.round(mainLanes.reduce((s, l) => s + l.speed, 0) / mainLanes.length)
-              : 0;
-            return (
-              <View key={idx} style={styles.stationRow}>
-                <Text style={styles.stationKm}>{station.mileage}K</Text>
-                <View style={styles.laneBands}>
-                  {mainLanes.map((lane, i) => {
-                    const c = getLaneColor(lane.speed);
-                    return <View key={i} style={[styles.laneBand, { backgroundColor: c.bar }]} />;
-                  })}
-                </View>
-                <Text style={styles.stationSpeed}>{avgSpeed}</Text>
-              </View>
-            );
-          })}
-        </View>
+        <BandSection stations={data.stations} />
       )}
 
       {/* 瓶頸列表 */}
@@ -248,7 +272,11 @@ const styles = StyleSheet.create({
   summaryVal: { color: COLORS.white, fontSize: 22, fontWeight: '600' },
   summaryLabel: { color: COLORS.dimGray, fontSize: 10, marginTop: 4 },
   bandSection: { paddingHorizontal: 16, marginBottom: 16 },
-  bandTitle: { color: COLORS.dimGray, fontSize: 12, marginBottom: 8 },
+  bandHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  bandTitle: { color: COLORS.dimGray, fontSize: 12 },
+  expandBtn: { color: COLORS.accent, fontSize: 12 },
+  expandBar: { backgroundColor: COLORS.card, borderRadius: 8, padding: 10, alignItems: 'center', marginTop: 4 },
+  expandBarText: { color: COLORS.accent, fontSize: 12 },
   legendRow: { flexDirection: 'row', gap: 16, marginBottom: 10 },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   legendDot: { width: 8, height: 8, borderRadius: 2 },

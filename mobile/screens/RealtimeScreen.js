@@ -78,18 +78,46 @@ function LaneCard({ lane, isBest }) {
 
 function AdviceBar({ advice, threshold }) {
   if (!advice) return null;
-  const isSwitch = advice.speed_diff >= threshold;
-  // Re-generate advice text based on current threshold
-  let action = advice.action;
-  let message = advice.message;
-  if (advice.speed_diff < threshold) {
+  const diff = advice.speed_diff;
+  const isStrong = diff >= 30;
+  const isMedium = diff >= threshold && diff < 30;
+  const isHold = diff < threshold;
+
+  let action, message, bgColor, borderColor, iconText;
+  if (isHold) {
     action = '維持目前車道';
-    message = `各車道速差僅 ${Math.round(advice.speed_diff)} km/h，低於門檻 ${threshold} km/h。切換車道效益不大，維持原車道即可。`;
+    message = advice.message;
+    bgColor = COLORS.card;
+    borderColor = COLORS.border;
+    iconText = '→';
+  } else if (isStrong) {
+    action = `立即切至${advice.best_lane}車道`;
+    message = advice.message;
+    bgColor = '#0B5E3F';
+    borderColor = COLORS.green;
+    iconText = '⚡';
+  } else {
+    action = `可切至${advice.best_lane}車道`;
+    message = advice.message;
+    bgColor = '#1A4A35';
+    borderColor = COLORS.green;
+    iconText = '↗';
   }
+
   return (
-    <View style={[styles.adviceBar, { backgroundColor: isSwitch ? COLORS.green : COLORS.card }]}>
-      <Text style={styles.adviceAction}>{action}</Text>
-      <Text style={styles.adviceDetail}>{message}</Text>
+    <View style={[styles.adviceBar, { backgroundColor: bgColor, borderLeftWidth: 4, borderLeftColor: borderColor }]}>
+      <View style={styles.adviceRow}>
+        <Text style={[styles.adviceIcon, isStrong && styles.adviceIconStrong]}>{iconText}</Text>
+        <View style={styles.adviceContent}>
+          <Text style={[styles.adviceAction, isStrong && styles.adviceActionStrong]}>{action}</Text>
+          <Text style={styles.adviceDetail}>{message}</Text>
+        </View>
+      </View>
+      {isStrong && (
+        <View style={styles.urgentBadge}>
+          <Text style={styles.urgentText}>速差 {Math.round(diff)} km/h</Text>
+        </View>
+      )}
       <Text style={styles.thresholdHint}>靈敏度: {threshold} km/h</Text>
       {advice.shoulder_note ? <Text style={styles.shoulderNote}>{advice.shoulder_note}</Text> : null}
     </View>
@@ -321,8 +349,15 @@ const styles = StyleSheet.create({
   errorText: { color: COLORS.redText, fontSize: 14, fontWeight: '500' },
   errorHint: { color: COLORS.redText, fontSize: 12, marginTop: 4, opacity: 0.7 },
   adviceBar: { marginHorizontal: 16, marginBottom: 16, borderRadius: 12, padding: 14 },
+  adviceRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  adviceIcon: { fontSize: 20, color: COLORS.dimGray, width: 28, textAlign: 'center', paddingTop: 2 },
+  adviceIconStrong: { fontSize: 24, color: COLORS.green },
+  adviceContent: { flex: 1 },
   adviceAction: { color: COLORS.white, fontSize: 16, fontWeight: '600' },
+  adviceActionStrong: { fontSize: 18, color: '#5DFFC1' },
   adviceDetail: { color: 'rgba(255,255,255,0.8)', fontSize: 13, marginTop: 4 },
+  urgentBadge: { backgroundColor: COLORS.green, borderRadius: 6, paddingHorizontal: 10, paddingVertical: 4, alignSelf: 'flex-start', marginTop: 8 },
+  urgentText: { color: '#04342C', fontSize: 12, fontWeight: '700' },
   shoulderNote: { color: 'rgba(255,255,255,0.6)', fontSize: 12, marginTop: 6, fontStyle: 'italic' },
   thresholdHint: { color: 'rgba(255,255,255,0.4)', fontSize: 10, marginTop: 4 },
   sectionLabel: { color: COLORS.dimGray, fontSize: 12, marginLeft: 20, marginBottom: 8 },
