@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { StyleSheet, Text, View, ScrollView, RefreshControl, TouchableOpacity, Dimensions } from 'react-native';
+import * as Location from 'expo-location';
 import { API_BASE, COLORS, getLaneColor } from '../constants';
 import { useSettings } from '../SettingsContext';
 
@@ -81,58 +82,55 @@ export default function RealtimeScreen() {
   const prevLanesRef = useRef({});
 
   const fetchAll = useCallback(async () => {
-    if (!navigator.geolocation) {
-      setGpsError('此裝置不支援 GPS 定位');
-      setLoading(false);
-      return;
-    }
-    navigator.geolocation.getCurrentPosition(
-      async (pos) => {
-        try {
-          setApiError(null);
-          setGpsError(null);
-          const nearbyResp = await fetch(
-            `${API_BASE}/api/v1/nearby?lat=${pos.coords.latitude}&lon=${pos.coords.longitude}`
-          );
-          if (!nearbyResp.ok) {
-            const err = await nearbyResp.json().catch(() => ({}));
-            setApiError(err.detail || `HTTP ${nearbyResp.status}`);
-            return;
-          }
-          const nearbyJson = await nearbyResp.json();
-          setGpsData(nearbyJson);
-
-          const { road, direction, mileage } = nearbyJson.nearest || {};
-          if (road && direction && mileage) {
-            const laneResp = await fetch(
-              `${API_BASE}/api/v1/lanes/realtime?road=${road}&dir=${direction}&km=${mileage}`
-            );
-            if (laneResp.ok) {
-              const laneJson = await laneResp.json();
-              if (laneData?.lanes) {
-                const prev = {};
-                laneData.lanes.forEach(l => { prev[l.name] = l.speed; });
-                prevLanesRef.current = prev;
-              }
-              setLaneData(laneJson);
-            }
-          }
-          setCountdown(30);
-        } catch (e) {
-          if (!gpsData) setApiError(`連線失敗: ${e.message}`);
-        } finally {
-          setLoading(false);
-          setRefreshing(false);
-        }
-      },
-      (err) => {
-        const msgs = { 1: 'GPS 權限被拒絕', 2: '無法取得定位', 3: '定位逾時' };
-        setGpsError(msgs[err.code] || 'GPS 定位失敗');
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setGpsError('GPS 權限未授權');
         setLoading(false);
         setRefreshing(false);
-      },
-      { enableHighAccuracy: true, timeout: 15000 }
-    );
+        return;
+      }
+
+      const loc = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+      });
+      const { latitude, longitude } = loc.coords;
+
+      setApiError(null);
+      setGpsError(null);
+      const nearbyResp = await fetch(
+        `${API_BASE}/api/v1/nearby?lat=${latitude}&lon=${longitude}`
+      );
+      if (!nearbyResp.ok) {
+        const err = await nearbyResp.json().catch(() => ({}));
+        setApiError(err.detail || `HTTP ${nearbyResp.status}`);
+        return;
+      }
+      const nearbyJson = await nearbyResp.json();
+      setGpsData(nearbyJson);
+
+      const { road, direction, mileage } = nearbyJson.nearest || {};
+      if (road && direction && mileage) {
+        const laneResp = await fetch(
+          `${API_BASE}/api/v1/lanes/realtime?road=${road}&dir=${direction}&km=${mileage}`
+        );
+        if (laneResp.ok) {
+          const laneJson = await laneResp.json();
+          if (laneData?.lanes) {
+            const prev = {};
+            laneData.lanes.forEach(l => { prev[l.name] = l.speed; });
+            prevLanesRef.current = prev;
+          }
+          setLaneData(laneJson);
+        }
+      }
+      setCountdown(30);
+    } catch (e) {
+      if (!gpsData) setApiError(`連線失敗: ${e.message}`);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, []);
 
   useEffect(() => {
