@@ -67,6 +67,57 @@ function findNearestInterchange(road, km) {
   return nearest;
 }
 
+function groupByInterchange(stations, roadId, direction) {
+  const icList = INTERCHANGES[roadId];
+  if (!icList || !icList.length || !stations.length) return [];
+
+  // 根據方向排序交流道
+  const isNorth = direction === '北向';
+  const sortedIcs = [...icList].sort((a, b) => isNorth ? b.km - a.km : a.km - b.km);
+
+  // 把 VD 站歸到最近的交流道區間
+  const sections = [];
+  for (let i = 0; i < sortedIcs.length - 1; i++) {
+    const fromIc = sortedIcs[i];
+    const toIc = sortedIcs[i + 1];
+    const kmLo = Math.min(fromIc.km, toIc.km);
+    const kmHi = Math.max(fromIc.km, toIc.km);
+    const sectionStations = stations.filter(s => {
+      const m = s.mileage;
+      return m >= kmLo && m <= kmHi;
+    });
+    if (sectionStations.length === 0) continue;
+
+    const mainLanes = sectionStations.flatMap(s =>
+      (s.lanes || []).filter(l => !l.is_shoulder && l.speed > 0)
+    );
+    const avgSpeed = mainLanes.length > 0
+      ? Math.round(mainLanes.reduce((sum, l) => sum + l.speed, 0) / mainLanes.length) : 0;
+    const dist = Math.abs(toIc.km - fromIc.km);
+    const estMin = avgSpeed > 0 ? Math.round(dist / avgSpeed * 60) : 0;
+
+    // 取區間中間站的車道資料（展開用）
+    const midStation = sectionStations[Math.floor(sectionStations.length / 2)];
+    const laneSpeeds = (midStation?.lanes || []).filter(l => !l.is_shoulder).map(l => ({
+      name: l.name, speed: l.speed,
+    }));
+
+    let level, color;
+    if (avgSpeed > 80) { level = '順暢'; color = '#1D9E75'; }
+    else if (avgSpeed >= 40) { level = '車多'; color = '#BA7517'; }
+    else { level = '壅塞'; color = '#E24B4A'; }
+
+    sections.push({
+      from: fromIc.name, to: toIc.name,
+      fromKm: fromIc.km, toKm: toIc.km,
+      dist: Math.round(dist * 10) / 10,
+      avgSpeed, estMin, level, color, laneSpeeds,
+      stationCount: sectionStations.length,
+    });
+  }
+  return sections;
+}
+
 // =====================================================
 // 駕駛模式主頁
 // =====================================================
@@ -80,6 +131,7 @@ export default function RealtimeScreen() {
   const [apiError, setApiError] = useState(null);
   const [countdown, setCountdown] = useState(30);
   const prevLanesRef = useRef({});
+  const [expandedSection, setExpandedSection] = useState(null);
 
   const fetchAll = useCallback(async () => {
     try {
@@ -335,32 +387,73 @@ export default function RealtimeScreen() {
             </View>
           )}
 
-          {/* — 沿途色帶（精簡版） — */}
-          {gpsData.stations?.length > 0 && (
-            <View style={styles.bandSection}>
-              <Text style={styles.bandTitle}>沿途路況 ({gpsData.stations.length} 站)</Text>
-              {gpsData.stations.slice(0, 15).map((station, idx) => {
-                const ml = station.lanes.filter(l => !l.is_shoulder);
-                const avg = ml.length > 0
-                  ? Math.round(ml.reduce((s, l) => s + l.speed, 0) / ml.length) : 0;
-                return (
-                  <View key={idx} style={styles.bandRow}>
-                    <Text style={styles.bandKm}>{station.mileage}K</Text>
-                    <View style={styles.bandBars}>
-                      {ml.map((lane, i) => {
-                        const c = getLaneColor(lane.speed);
-                        return <View key={i} style={[styles.bandBar, { backgroundColor: c.bar }]} />;
-                      })}
-                    </View>
-                    <Text style={styles.bandAvg}>{avg}</Text>
-                  </View>
-                );
-              })}
-              {gpsData.stations.length > 15 && (
-                <Text style={styles.bandMore}>... 還有 {gpsData.stations.length - 15} 站</Text>
-              )}
-            </View>
-          )}
+          {/* — 前方路況（交流道區間） — */}
+          {gpsData.stations?.length > 0 && (() => {
+            const roadId = gpsData?.nearest?.road;
+            const sections = groupByInterchange(gpsData.stations, roadId, dirLabel);
+            if (sections.length === 0) return null;
+            return (
+              <View style={styles.routeSection}>
+                <Text style={styles.routeSectionTitle}>前方路況</Text>
+                {sections.slice(0, 8).map((sec, idx) => {
+                  const isExpanded = expandedSection === idx;
+                  const barWidth = Math.max(15, Math.min(100, sec.avgSpeed / 110 * 100));
+                  return (
+                    <TouchableOpacity
+                      key={idx}
+                      style={styles.routeCard}
+                      onPress={() => setExpandedSection(isExpanded ? null : idx)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={styles.routeCardHeader}>
+                        <View style={styles.routeCardLeft}>
+                          <View style={[styles.routeDot, { backgroundColor: sec.color }]} />
+                          <Text style={styles.routeIcName}>{sec.from}</Text>
+                        </View>
+                        <Text style={styles.routeEst}>{sec.estMin}分 · {sec.dist}km</Text>
+                      </View>
+                      <View style={styles.routeBarRow}>
+                        <View style={styles.routeBarBg}>
+                          <View style={[styles.routeBarFill, { width: `${barWidth}%`, backgroundColor: sec.color }]} />
+                        </View>
+                        <Text style={[styles.routeSpeedText, { color: sec.color }]}>{sec.avgSpeed}</Text>
+                        <Text style={[styles.routeLevelText, { color: sec.color }]}>{sec.level}</Text>
+                      </View>
+                      {isExpanded && sec.laneSpeeds.length > 0 && (
+                        <View style={styles.routeLanesRow}>
+                          {sec.laneSpeeds.map((lane, li) => {
+                            const lc = getLaneColor(lane.speed);
+                            return (
+                              <View key={li} style={[styles.routeLaneBlock, { backgroundColor: lc.bg }]}>
+                                <Text style={[styles.routeLaneName, { color: lc.text }]}>{lane.name}</Text>
+                                <Text style={styles.routeLaneSpeed}>{Math.round(lane.speed)}</Text>
+                              </View>
+                            );
+                          })}
+                        </View>
+                      )}
+                      {isExpanded && sec.laneSpeeds.length > 0 && sec.laneSpeeds.length >= 2 && (() => {
+                        const best = sec.laneSpeeds.reduce((a, b) => a.speed > b.speed ? a : b);
+                        const worst = sec.laneSpeeds.reduce((a, b) => a.speed < b.speed ? a : b);
+                        const diff = best.speed - worst.speed;
+                        if (diff < sensitivity) return null;
+                        return (
+                          <View style={styles.routeAdviceRow}>
+                            <Text style={styles.routeAdviceText}>
+                              建議走 {best.name}，快 {Math.round(diff)} km/h
+                            </Text>
+                          </View>
+                        );
+                      })()}
+                    </TouchableOpacity>
+                  );
+                })}
+                {sections.length > 8 && (
+                  <Text style={styles.routeMore}>... 還有 {sections.length - 8} 段</Text>
+                )}
+              </View>
+            );
+          })()}
 
           <Text style={styles.footer}>每 30 秒更新 · 交通部即時資料</Text>
         </>
@@ -499,15 +592,43 @@ const styles = StyleSheet.create({
   statVal: { color: '#fff', fontSize: 22, fontWeight: '700' },
   statLabel: { color: '#666', fontSize: 10, marginTop: 4 },
 
-  // ===== 色帶 =====
-  bandSection: { paddingHorizontal: 16, marginTop: 4, marginBottom: 8 },
-  bandTitle: { color: '#555', fontSize: 11, marginBottom: 6 },
-  bandRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 2, gap: 6 },
-  bandKm: { color: '#444', fontSize: 9, width: 36, textAlign: 'right' },
-  bandBars: { flex: 1, flexDirection: 'row', gap: 1.5 },
-  bandBar: { flex: 1, height: 8, borderRadius: 1.5 },
-  bandAvg: { color: '#555', fontSize: 9, width: 24, textAlign: 'right' },
-  bandMore: { color: '#444', fontSize: 10, textAlign: 'center', paddingVertical: 6 },
+  // ===== 前方路況（交流道區間） =====
+  routeSection: { paddingHorizontal: 16, marginTop: 8, marginBottom: 8 },
+  routeSectionTitle: { color: '#999', fontSize: 13, fontWeight: '600', marginBottom: 10 },
+  routeCard: {
+    backgroundColor: '#151518', borderRadius: 14, padding: 14,
+    marginBottom: 8,
+  },
+  routeCardHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    marginBottom: 10,
+  },
+  routeCardLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  routeDot: { width: 10, height: 10, borderRadius: 5 },
+  routeIcName: { color: '#fff', fontSize: 15, fontWeight: '600' },
+  routeEst: { color: '#777', fontSize: 12 },
+  routeBarRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  routeBarBg: {
+    flex: 1, height: 8, backgroundColor: '#2a2a2e', borderRadius: 4, overflow: 'hidden',
+  },
+  routeBarFill: { height: 8, borderRadius: 4 },
+  routeSpeedText: { fontSize: 16, fontWeight: '700', width: 32, textAlign: 'right' },
+  routeLevelText: { fontSize: 11, width: 28 },
+  routeLanesRow: {
+    flexDirection: 'row', gap: 6, marginTop: 12, paddingTop: 12,
+    borderTopWidth: 0.5, borderTopColor: '#2a2a2e',
+  },
+  routeLaneBlock: {
+    flex: 1, borderRadius: 10, paddingVertical: 10, alignItems: 'center',
+  },
+  routeLaneName: { fontSize: 10, marginBottom: 3 },
+  routeLaneSpeed: { color: '#fff', fontSize: 20, fontWeight: '700' },
+  routeAdviceRow: {
+    marginTop: 8, backgroundColor: '#0a3d2d', borderRadius: 8,
+    paddingHorizontal: 12, paddingVertical: 6,
+  },
+  routeAdviceText: { color: '#5DCAA5', fontSize: 12, fontWeight: '500' },
+  routeMore: { color: '#444', fontSize: 11, textAlign: 'center', paddingVertical: 8 },
 
   footer: { color: '#333', fontSize: 9, textAlign: 'center', paddingVertical: 20 },
 });
