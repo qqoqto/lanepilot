@@ -889,6 +889,17 @@ def run_live():
 # ============================================================
 
 def to_api_response(station, advice):
+    if advice is None:
+        return {
+            "vd_id": station.vd_id,
+            "road": f"國{station.road_id}",
+            "direction": "北向" if station.direction == "N" else "南向",
+            "mileage": station.mileage,
+            "location": station.location_desc,
+            "data_time": station.data_time,
+            "lanes": [],
+            "advice": None,
+        }
     return {
         "vd_id": station.vd_id,
         "road": f"國{station.road_id}",
