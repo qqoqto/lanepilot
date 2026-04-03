@@ -147,7 +147,7 @@ def is_shoulder_open(road, direction, mileage, check_time=None):
 # 3. VD 資料擷取
 # ============================================================
 
-VD_LIVE_URL = "https://tisvcloud.freeway.gov.tw/history/motc20/VDLive.xml"
+VD_LIVE_URL = "http://tisvcloud.freeway.gov.tw/history/motc20/VDLive.xml"
 
 def fetch_vd_live(max_retries=3):
     try:
