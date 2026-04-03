@@ -276,21 +276,25 @@ export default function RealtimeScreen() {
           {nearbyRoads.length > 0 && distKm > 1 && (
             <View style={styles.nearbySection}>
               <Text style={styles.nearbySectionTitle}>附近國道路況</Text>
-              {nearbyRoads.map((nr, idx) => (
-                <View key={idx} style={styles.nearbyCard}>
-                  <View style={styles.nearbyCardLeft}>
-                    <Text style={styles.nearbyRoadName}>{nr.road_name} {nr.direction}</Text>
-                    <Text style={styles.nearbyDistance}>距離 {nr.distance_km} km</Text>
-                  </View>
-                  <View style={styles.nearbyCardRight}>
-                    <View style={[styles.nearbySpeedBadge, { backgroundColor: nr.color + '22' }]}>
-                      <Text style={[styles.nearbySpeed, { color: nr.color }]}>{nr.avg_speed}</Text>
-                      <Text style={[styles.nearbySpeedUnit, { color: nr.color }]}>km/h</Text>
+              {nearbyRoads.map((nr, idx) => {
+                const nrIc = findNearestInterchange(nr.road, nr.mileage);
+                return (
+                  <View key={idx} style={styles.nearbyCard}>
+                    <View style={styles.nearbyCardLeft}>
+                      <Text style={styles.nearbyRoadName}>{nr.road_name} {nr.direction}</Text>
+                      {nrIc && <Text style={styles.nearbyIcName}>近 {nrIc.name}</Text>}
+                      <Text style={styles.nearbyDistance}>距離 {nr.distance_km} km</Text>
                     </View>
-                    <Text style={[styles.nearbyLevel, { color: nr.color }]}>{nr.level}</Text>
+                    <View style={styles.nearbyCardRight}>
+                      <View style={[styles.nearbySpeedBadge, { backgroundColor: nr.color + '22' }]}>
+                        <Text style={[styles.nearbySpeed, { color: nr.color }]}>{nr.avg_speed}</Text>
+                        <Text style={[styles.nearbySpeedUnit, { color: nr.color }]}>km/h</Text>
+                      </View>
+                      <Text style={[styles.nearbyLevel, { color: nr.color }]}>{nr.level}</Text>
+                    </View>
                   </View>
-                </View>
-              ))}
+                );
+              })}
             </View>
           )}
 
@@ -463,6 +467,7 @@ const styles = StyleSheet.create({
   },
   nearbyCardLeft: { flex: 1 },
   nearbyRoadName: { color: '#fff', fontSize: 16, fontWeight: '600' },
+  nearbyIcName: { color: '#aaa', fontSize: 12, marginTop: 2 },
   nearbyDistance: { color: '#666', fontSize: 11, marginTop: 3 },
   nearbyCardRight: { alignItems: 'flex-end' },
   nearbySpeedBadge: {
