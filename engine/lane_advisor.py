@@ -429,8 +429,8 @@ class VDLocationIndex:
                 }
         return best
 
-    def find_nearby_roads(self, lat, lon, max_roads=3):
-        """找最近的多條不同國道 (每條國道取最近的方向)"""
+    def find_nearby_roads(self, lat, lon, max_roads=6):
+        """找最近的多條不同國道+方向, 每條國道南北向都列"""
         if not self.stations:
             return []
         # 計算每個 VD 站的距離
@@ -443,7 +443,7 @@ class VDLocationIndex:
                 "lat": vlat, "lon": vlon
             })
         candidates.sort(key=lambda x: x["distance_km"])
-        # 每條國道+方向只取最近的一個
+        # 每條國道+方向只取最近的一個, 最多 max_roads 條
         seen = set()
         results = []
         for c in candidates:

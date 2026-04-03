@@ -347,7 +347,7 @@ def bottlenecks(
     }
 
 
-def _get_nearby_roads_summary(lat, lon, max_roads=3):
+def _get_nearby_roads_summary(lat, lon, max_roads=6):
     """取得附近多條國道的路況摘要"""
     nearby_list = cache.location_index.find_nearby_roads(lat, lon, max_roads)
     summaries = []
