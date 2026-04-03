@@ -52,30 +52,30 @@ class VDCache:
         self.location_index = VDLocationIndex()
 
     async def refresh(self):
-        """抓取最新 VD 資料並更新快取 (優先 tisvcloud XML 免費無限制, fallback TDX JSON)"""
+        """抓取最新 VD 資料並更新快取 (優先 TDX JSON, fallback tisvcloud XML)"""
         async with self._lock:
             try:
                 loop = asyncio.get_event_loop()
                 tdx_data = None
                 xml_str = None
 
-                # 優先使用 tisvcloud XML (免費、無額度限制)
-                xml_str = await loop.run_in_executor(None, fetch_vd_live)
+                # 優先使用 TDX API (JSON, 較快)
+                tdx_data = await loop.run_in_executor(None, fetch_vd_tdx)
 
-                # tisvcloud 失敗則 fallback 到 TDX API
-                if xml_str is None:
-                    logger.info("tisvcloud 不可用, fallback 到 TDX API")
-                    tdx_data = await loop.run_in_executor(None, fetch_vd_tdx)
+                # TDX 失敗則 fallback 到 tisvcloud XML
+                if tdx_data is None:
+                    logger.info("TDX 不可用, fallback 到 tisvcloud XML")
+                    xml_str = await loop.run_in_executor(None, fetch_vd_live)
 
                 if tdx_data is None and xml_str is None:
-                    self.last_error = "tisvcloud 和 TDX 都無法連線"
+                    self.last_error = "TDX 和 tisvcloud 都無法連線"
                     logger.warning("VD 資料抓取失敗")
                     return False
 
                 self.last_update = datetime.now()
                 self.update_count += 1
                 self.last_error = ""
-                self.data_source = "tisvcloud" if xml_str else "TDX"
+                self.data_source = "TDX" if tdx_data else "tisvcloud"
 
                 # 預解析常用路段 (國1 全線)
                 for road in ["1", "1H", "3"]:
@@ -139,7 +139,7 @@ async def vd_refresh_loop():
     """每 60 秒抓一次 VD 資料"""
     while True:
         await cache.refresh()
-        await asyncio.sleep(60)
+        await asyncio.sleep(120)
 
 
 @asynccontextmanager
