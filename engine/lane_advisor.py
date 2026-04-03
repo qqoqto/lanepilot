@@ -156,13 +156,18 @@ def fetch_vd_live(max_retries=3):
         print("[WARN] httpx 未安裝")
         return None
 
-    # connect 30秒, read 180秒 (5MB XML 從海外抓比較慢)
-    timeout = httpx.Timeout(connect=30, read=180, write=30, pool=30)
+    # connect 60秒, read 300秒 (5MB XML 從海外抓比較慢)
+    timeout = httpx.Timeout(connect=60, read=300, write=30, pool=60)
+    headers = {
+        "User-Agent": "LanePilot/1.2 (https://github.com/qqoqto/lanepilot)",
+        "Accept": "application/xml, text/xml, */*",
+        "Accept-Encoding": "gzip, deflate",
+    }
 
     for attempt in range(1, max_retries + 1):
         try:
             print(f"[INFO] 抓取 VDLive.xml ... (第 {attempt} 次)")
-            with httpx.Client(timeout=timeout, verify=False) as client:
+            with httpx.Client(timeout=timeout, verify=False, headers=headers, follow_redirects=True) as client:
                 resp = client.get(VD_LIVE_URL)
                 resp.raise_for_status()
                 size = len(resp.content)
@@ -172,7 +177,7 @@ def fetch_vd_live(max_retries=3):
             print(f"[WARN] 第 {attempt} 次失敗: {e}")
             if attempt < max_retries:
                 import time
-                time.sleep(10)
+                time.sleep(15)
     print(f"[WARN] 已重試 {max_retries} 次, 全部失敗")
     return None
 
