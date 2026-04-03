@@ -347,6 +347,46 @@ def bottlenecks(
     }
 
 
+def _get_nearby_roads_summary(lat, lon, max_roads=3):
+    """取得附近多條國道的路況摘要"""
+    nearby_list = cache.location_index.find_nearby_roads(lat, lon, max_roads)
+    summaries = []
+    now = datetime.now()
+    for nr in nearby_list:
+        road = nr["road"]
+        direction = nr["direction"]
+        stations = cache.get_stations(road, direction, 0, 999)
+        if not stations:
+            continue
+        # 找最近該位置的 5 個站
+        sorted_by_dist = sorted(stations, key=lambda s: abs(s.mileage - nr["mileage"]))
+        nearby_stations = sorted_by_dist[:5]
+        main_speeds = [l.speed for s in nearby_stations for l in s.lanes if not l.is_shoulder and l.speed > 0]
+        avg_speed = round(sum(main_speeds) / len(main_speeds)) if main_speeds else 0
+        # 速度分級
+        if avg_speed > 80:
+            level = "順暢"
+            color = "#1D9E75"
+        elif avg_speed >= 40:
+            level = "車多"
+            color = "#BA7517"
+        else:
+            level = "壅塞"
+            color = "#E24B4A"
+        dir_label = "北向" if direction == "N" else "南向"
+        summaries.append({
+            "road": road,
+            "road_name": nr["road_name"],
+            "direction": dir_label,
+            "distance_km": nr["distance_km"],
+            "mileage": nr["mileage"],
+            "avg_speed": avg_speed,
+            "level": level,
+            "color": color,
+        })
+    return summaries
+
+
 @app.get("/api/v1/nearby")
 def nearby(
     lat: float = Query(..., description="緯度"),
@@ -410,5 +450,6 @@ def nearby(
         },
         "bottlenecks": bn_list,
         "stations": results,
+        "nearby_roads": _get_nearby_roads_summary(lat, lon),
         "data_time": cache.last_update.isoformat()
     }

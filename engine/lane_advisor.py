@@ -147,7 +147,7 @@ def is_shoulder_open(road, direction, mileage, check_time=None):
 # 3. VD 資料擷取
 # ============================================================
 
-VD_LIVE_URL = "http://tisvcloud.freeway.gov.tw/history/motc20/VDLive.xml"
+VD_LIVE_URL = "https://tisvcloud.freeway.gov.tw/history/motc20/VDLive.xml"
 
 def fetch_vd_live(max_retries=3):
     try:
@@ -428,6 +428,33 @@ class VDLocationIndex:
                     "lat": vlat, "lon": vlon
                 }
         return best
+
+    def find_nearby_roads(self, lat, lon, max_roads=3):
+        """找最近的多條不同國道 (每條國道取最近的方向)"""
+        if not self.stations:
+            return []
+        # 計算每個 VD 站的距離
+        candidates = []
+        for vdid, road, direction, mileage, vlat, vlon, road_name in self.stations:
+            dist = _haversine(lat, lon, vlat, vlon)
+            candidates.append({
+                "road": road, "direction": direction, "mileage": mileage,
+                "road_name": road_name, "distance_km": round(dist, 2),
+                "lat": vlat, "lon": vlon
+            })
+        candidates.sort(key=lambda x: x["distance_km"])
+        # 每條國道+方向只取最近的一個
+        seen = set()
+        results = []
+        for c in candidates:
+            key = (c["road"], c["direction"])
+            if key in seen:
+                continue
+            seen.add(key)
+            results.append(c)
+            if len(results) >= max_roads:
+                break
+        return results
 
 
 def _lane_names_for_count(n):
