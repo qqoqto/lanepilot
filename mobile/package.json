@@ -13,6 +13,7 @@
     "@react-navigation/bottom-tabs": "^7.15.8",
     "@react-navigation/native": "^7.2.1",
     "expo": "55.0.10-canary-20260327-0789fbc",
+    "expo-location": "55.1.5-canary-20260327-0789fbc",
     "expo-status-bar": "55.0.5-canary-20260327-0789fbc",
     "react": "19.2.0",
     "react-dom": "19.2.0",
