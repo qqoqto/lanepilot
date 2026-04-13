@@ -1,6 +1,7 @@
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar, View, Text } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { SettingsProvider } from './SettingsContext';
 
 import RealtimeScreen from './screens/RealtimeScreen';
@@ -28,8 +29,10 @@ function TabIcon({ label, focused }) {
 
 export default function App() {
   return (
+    <SafeAreaProvider>
     <SettingsProvider>
       <StatusBar barStyle="light-content" />
+      <SafeAreaView style={{ flex: 1, backgroundColor: '#111114' }} edges={['top']}>
       <NavigationContainer>
         <Tab.Navigator
           screenOptions={{
@@ -55,6 +58,8 @@ export default function App() {
             options={{ tabBarIcon: ({ focused }) => <TabIcon label="設定" focused={focused} /> }} />
         </Tab.Navigator>
       </NavigationContainer>
+      </SafeAreaView>
     </SettingsProvider>
+    </SafeAreaProvider>
   );
 }
