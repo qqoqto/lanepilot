@@ -17,3 +17,11 @@ build/
 Thumbs.db
 node_modules/
 *.log
+
+# 根目錄不該有的 EAS/Expo 檔案（只在 mobile/ 裡需要）
+/app.json
+/eas.json
+
+# 測試用檔案
+test_vd.xml
+1.jpg
