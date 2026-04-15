@@ -121,6 +121,26 @@ function groupByInterchange(stations, roadId, direction) {
 // =====================================================
 // 駕駛模式主頁
 // =====================================================
+// 帶重試的 fetch，處理伺服器冷啟動/暫時不可用
+async function fetchWithRetry(url, { retries = 3, delay = 3000 } = {}) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const resp = await fetch(url);
+      if (resp.status === 503 && i < retries) {
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      return resp;
+    } catch (e) {
+      if (i < retries) {
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
 export default function RealtimeScreen() {
   const { sensitivity } = useSettings();
   const [gpsData, setGpsData] = useState(null);
@@ -150,12 +170,11 @@ export default function RealtimeScreen() {
 
       setApiError(null);
       setGpsError(null);
-      const nearbyResp = await fetch(
+      const nearbyResp = await fetchWithRetry(
         `${API_BASE}/api/v1/nearby?lat=${latitude}&lon=${longitude}`
       );
       if (!nearbyResp.ok) {
-        const err = await nearbyResp.json().catch(() => ({}));
-        setApiError(err.detail || `HTTP ${nearbyResp.status}`);
+        setApiError('目前無法取得路況資料，請稍後再試');
         return;
       }
       const nearbyJson = await nearbyResp.json();
@@ -163,7 +182,7 @@ export default function RealtimeScreen() {
 
       const { road, direction, mileage } = nearbyJson.nearest || {};
       if (road && direction && mileage) {
-        const laneResp = await fetch(
+        const laneResp = await fetchWithRetry(
           `${API_BASE}/api/v1/lanes/realtime?road=${road}&dir=${direction}&km=${mileage}`
         );
         if (laneResp.ok) {
@@ -178,7 +197,7 @@ export default function RealtimeScreen() {
       }
       setCountdown(30);
     } catch (e) {
-      if (!gpsData) setApiError(`連線失敗: ${e.message}`);
+      if (!gpsData) setApiError('網路連線異常，請確認網路後下拉重新整理');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -249,8 +268,13 @@ export default function RealtimeScreen() {
         </View>
       )}
       {apiError && !loading && (
-        <View style={styles.errorBox}>
-          <Text style={styles.errorText}>{apiError}</Text>
+        <View style={styles.centerBox}>
+          <Text style={styles.centerIcon}>📶</Text>
+          <Text style={styles.centerTitle}>{apiError}</Text>
+          <Text style={styles.centerHint}>也可以到「路段」分頁手動查詢路況</Text>
+          <TouchableOpacity style={styles.retryBtn} onPress={() => { setLoading(true); setApiError(null); fetchAll(); }}>
+            <Text style={styles.retryText}>重新載入</Text>
+          </TouchableOpacity>
         </View>
       )}
 
@@ -486,8 +510,6 @@ const styles = StyleSheet.create({
   centerHint: { color: '#666', fontSize: 13, marginTop: 8, textAlign: 'center' },
   retryBtn: { marginTop: 24, backgroundColor: '#0f3d2e', borderRadius: 10, paddingHorizontal: 28, paddingVertical: 12 },
   retryText: { color: '#5DCAA5', fontSize: 14, fontWeight: '600' },
-  errorBox: { margin: 16, padding: 16, backgroundColor: '#2a1010', borderRadius: 12 },
-  errorText: { color: '#f88', fontSize: 14 },
 
   // 位置標題
   locationRow: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4 },

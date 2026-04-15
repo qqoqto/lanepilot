@@ -2,6 +2,25 @@ import { useState, useEffect, useCallback } from 'react';
 import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Switch, RefreshControl } from 'react-native';
 import { API_BASE, COLORS, getLaneColor } from '../constants';
 
+async function fetchWithRetry(url, { retries = 3, delay = 3000 } = {}) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const resp = await fetch(url);
+      if (resp.status === 503 && i < retries) {
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      return resp;
+    } catch (e) {
+      if (i < retries) {
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      throw e;
+    }
+  }
+}
+
 const INITIAL_ROUTES = [
   {
     id: 1, name: '上班 (平日)', enabled: true,
@@ -129,15 +148,15 @@ export default function CommuteScreen() {
     const newMap = {};
     for (const route of routes) {
       try {
-        const resp = await fetch(
+        const resp = await fetchWithRetry(
           `${API_BASE}/api/v1/sections?road=${route.road}&dir=${route.dir}&km_min=${route.km_min}&km_max=${route.km_max}`
         );
         if (resp.ok) {
           newMap[route.id] = await resp.json();
         }
-      } catch (e) { /* ignore */ }
+      } catch (e) { /* 靜默重試已在 fetchWithRetry 處理 */ }
     }
-    setLiveDataMap(newMap);
+    setLiveDataMap(prev => Object.keys(newMap).length > 0 ? newMap : prev);
 
     // 生成模擬推播紀錄
     const logs = [];
