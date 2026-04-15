@@ -152,6 +152,9 @@ export default function RealtimeScreen() {
   const [countdown, setCountdown] = useState(30);
   const prevLanesRef = useRef({});
   const [expandedSection, setExpandedSection] = useState(null);
+  const [userSpeed, setUserSpeed] = useState(null);           // GPS 速度 (km/h)
+  const [currentLane, setCurrentLane] = useState(null);       // 推測/手動選的車道名稱
+  const [laneManualOverride, setLaneManualOverride] = useState(false); // 是否手動選過
 
   const fetchAll = useCallback(async () => {
     try {
@@ -166,7 +169,10 @@ export default function RealtimeScreen() {
       const loc = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
       });
-      const { latitude, longitude } = loc.coords;
+      const { latitude, longitude, speed: gpsSpeed } = loc.coords;
+      // GPS speed 是 m/s，轉成 km/h；靜止或無效時為 null
+      const speedKmh = (gpsSpeed != null && gpsSpeed >= 0) ? Math.round(gpsSpeed * 3.6) : null;
+      setUserSpeed(speedKmh);
 
       setApiError(null);
       setGpsError(null);
@@ -182,8 +188,9 @@ export default function RealtimeScreen() {
 
       const { road, direction, mileage } = nearbyJson.nearest || {};
       if (road && direction && mileage) {
+        const speedParam = speedKmh != null ? `&speed=${speedKmh}` : '';
         const laneResp = await fetchWithRetry(
-          `${API_BASE}/api/v1/lanes/realtime?road=${road}&dir=${direction}&km=${mileage}`
+          `${API_BASE}/api/v1/lanes/realtime?road=${road}&dir=${direction}&km=${mileage}${speedParam}`
         );
         if (laneResp.ok) {
           const laneJson = await laneResp.json();
@@ -193,6 +200,10 @@ export default function RealtimeScreen() {
             prevLanesRef.current = prev;
           }
           setLaneData(laneJson);
+          // 自動偵測車道（如果使用者沒有手動選過）
+          if (!laneManualOverride && laneJson.estimated_lane?.confidence !== 'low') {
+            setCurrentLane(laneJson.estimated_lane?.lane_name || null);
+          }
         }
       }
       setCountdown(30);
@@ -298,10 +309,23 @@ export default function RealtimeScreen() {
               <Text style={styles.adviceEmoji}>
                 {isHold ? '✓' : isStrong ? '⇒' : '→'}
               </Text>
-              <Text style={[styles.adviceMainText, isStrong && styles.adviceMainTextStrong]}>
-                {isHold ? '維持車道' : isStrong ? `切 ${advice.best_lane}` : `考慮 ${advice.best_lane}`}
-              </Text>
-              {!isHold && (
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.adviceMainText, isStrong && styles.adviceMainTextStrong]}>
+                  {isHold
+                    ? (currentLane ? `在${currentLane}，維持車道` : '維持車道')
+                    : (currentLane
+                      ? (isStrong ? `${currentLane} → ${advice.best_lane}` : `考慮 ${currentLane} → ${advice.best_lane}`)
+                      : (isStrong ? `切 ${advice.best_lane}` : `考慮 ${advice.best_lane}`)
+                    )
+                  }
+                </Text>
+                {currentLane && !isHold && (
+                  <Text style={styles.adviceSubText}>
+                    {advice.best_lane} 快 {Math.round(diff)} km/h
+                  </Text>
+                )}
+              </View>
+              {!isHold && !currentLane && (
                 <Text style={styles.adviceDiffText}>
                   快 {Math.round(diff)} km/h
                 </Text>
@@ -309,24 +333,49 @@ export default function RealtimeScreen() {
             </View>
           )}
 
-          {/* — 車道速度色塊 — */}
+          {/* — 車道速度色塊（點擊可手動選擇所在車道） — */}
           {mainLanes.length > 0 && (
             <View style={styles.lanesRow}>
               {mainLanes.map((lane, idx) => {
                 const c = getLaneColor(lane.speed);
                 const isBest = advice && lane.name === advice.best_lane;
+                const isCurrent = currentLane === lane.name;
                 const isStuck = lane.speed <= 1;
                 return (
-                  <View key={idx} style={[styles.laneBlock, { backgroundColor: c.bg }]}>
-                    {isBest && <View style={styles.bestDot} />}
+                  <TouchableOpacity
+                    key={idx}
+                    style={[
+                      styles.laneBlock,
+                      { backgroundColor: c.bg },
+                      isCurrent && styles.laneBlockCurrent,
+                    ]}
+                    activeOpacity={0.7}
+                    onPress={() => {
+                      setCurrentLane(lane.name);
+                      setLaneManualOverride(true);
+                    }}
+                  >
+                    {isBest && !isCurrent && <View style={styles.bestDot} />}
+                    {isCurrent && <Text style={styles.currentLaneTag}>你在這</Text>}
                     <Text style={[styles.laneLabel, { color: c.text }]}>{lane.name}</Text>
                     <Text style={styles.laneSpeedBig}>{isStuck ? '!' : Math.round(lane.speed)}</Text>
                     <Text style={[styles.laneSpeedUnit, { color: c.text }]}>
                       {isStuck ? '靜止' : 'km/h'}
                     </Text>
-                  </View>
+                  </TouchableOpacity>
                 );
               })}
+            </View>
+          )}
+          {/* — GPS 速度 + 車道定位提示 — */}
+          {mainLanes.length > 0 && (
+            <View style={styles.laneHintRow}>
+              {userSpeed != null && <Text style={styles.laneHintText}>你的車速 {userSpeed} km/h</Text>}
+              {currentLane && (
+                <TouchableOpacity onPress={() => { setCurrentLane(null); setLaneManualOverride(false); }}>
+                  <Text style={styles.laneResetText}>重設車道</Text>
+                </TouchableOpacity>
+              )}
             </View>
           )}
 
@@ -524,8 +573,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 14,
   },
   adviceEmoji: { fontSize: 28, color: '#fff', width: 36, textAlign: 'center' },
-  adviceMainText: { color: '#fff', fontSize: 26, fontWeight: '700', flex: 1 },
+  adviceMainText: { color: '#fff', fontSize: 26, fontWeight: '700' },
   adviceMainTextStrong: { color: '#5DFFC1', fontSize: 30 },
+  adviceSubText: { color: '#5DCAA5', fontSize: 13, marginTop: 4 },
   adviceDiffText: {
     color: '#5DCAA5', fontSize: 14, fontWeight: '600',
     backgroundColor: '#0a3d2d', borderRadius: 8,
@@ -543,6 +593,13 @@ const styles = StyleSheet.create({
     minHeight: 100,
     justifyContent: 'center',
   },
+  laneBlockCurrent: {
+    borderWidth: 2, borderColor: '#5DCAA5',
+  },
+  currentLaneTag: {
+    position: 'absolute', top: 6,
+    color: '#5DCAA5', fontSize: 9, fontWeight: '700',
+  },
   bestDot: {
     position: 'absolute', top: 8, right: 8,
     width: 8, height: 8, borderRadius: 4, backgroundColor: '#5DCAA5',
@@ -550,6 +607,14 @@ const styles = StyleSheet.create({
   laneLabel: { fontSize: 12, marginBottom: 4, fontWeight: '500' },
   laneSpeedBig: { color: '#fff', fontSize: 36, fontWeight: '700' },
   laneSpeedUnit: { fontSize: 11, marginTop: 2 },
+
+  // 車道定位提示
+  laneHintRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingHorizontal: 16, marginBottom: 12,
+  },
+  laneHintText: { color: '#555', fontSize: 11 },
+  laneResetText: { color: '#5DCAA5', fontSize: 11 },
 
   // 路肩
   shoulderRow: {

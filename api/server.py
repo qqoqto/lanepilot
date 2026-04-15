@@ -28,7 +28,8 @@ from engine.lane_advisor import (
     fetch_vd_live, parse_vd_xml, process_station, detect_bottlenecks,
     to_api_response, is_shoulder_open, VDStation,
     fetch_vd_tdx, parse_vd_json,
-    fetch_vd_static_tdx, VDLocationIndex
+    fetch_vd_static_tdx, VDLocationIndex,
+    estimate_current_lane
 )
 
 logger = logging.getLogger("lanepilot")
@@ -210,14 +211,15 @@ def lanes_realtime(
     dir: str = Query("N", description="方向: N=北向, S=南向"),
     km: float = Query(None, description="里程 (找最近的 VD 站)"),
     km_min: float = Query(None, description="起始里程"),
-    km_max: float = Query(None, description="結束里程")
+    km_max: float = Query(None, description="結束里程"),
+    speed: float = Query(None, description="使用者 GPS 速度 (km/h), 用於推測所在車道")
 ):
     """
     查詢指定位置各車道即時速度 + 車道建議
-    
+
     用法1: 指定里程, 回傳最近的 VD 站
-      GET /api/v1/lanes/realtime?road=1&dir=N&km=89
-    
+      GET /api/v1/lanes/realtime?road=1&dir=N&km=89&speed=85
+
     用法2: 指定範圍, 回傳範圍內所有站
       GET /api/v1/lanes/realtime?road=1&dir=N&km_min=85&km_max=99
     """
@@ -232,7 +234,7 @@ def lanes_realtime(
         if station is None:
             raise HTTPException(404, f"找不到國{road} {dir}向 {km}K 附近的 VD 站")
         advice = process_station(station, now)
-        return to_api_response(station, advice)
+        return to_api_response(station, advice, user_speed=speed)
 
     # 範圍查詢
     if km_min is None: km_min = 0
@@ -391,7 +393,8 @@ def _get_nearby_roads_summary(lat, lon, max_roads=6):
 def nearby(
     lat: float = Query(..., description="緯度"),
     lon: float = Query(..., description="經度"),
-    range_km: float = Query(20, description="前後公里數")
+    range_km: float = Query(20, description="前後公里數"),
+    speed: float = Query(None, description="使用者 GPS 速度 (km/h)")
 ):
     """
     GPS 定位: 根據經緯度找最近的國道路段, 回傳前後路況

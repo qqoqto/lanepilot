@@ -917,10 +917,50 @@ def run_live():
 
 
 # ============================================================
-# 10. API 輸出
+# 10. 車道定位（GPS 速度比對）
 # ============================================================
 
-def to_api_response(station, advice):
+def estimate_current_lane(user_speed_kmh, lane_scores):
+    """
+    用使用者 GPS 速度比對各車道 VD 速度，推測目前所在車道。
+    回傳 { lane_name, confidence, speed_diff }
+    """
+    if not user_speed_kmh or user_speed_kmh < 0 or not lane_scores:
+        return None
+
+    main_lanes = [s for s in lane_scores if not s.is_shoulder and s.speed > 0]
+    if not main_lanes:
+        return None
+
+    # 找最接近使用者速度的車道
+    best_match = min(main_lanes, key=lambda s: abs(s.speed - user_speed_kmh))
+    diff = abs(best_match.speed - user_speed_kmh)
+
+    # 檢查各車道之間的速差，判斷信心度
+    speeds = sorted([s.speed for s in main_lanes])
+    lane_spread = speeds[-1] - speeds[0] if len(speeds) > 1 else 0
+
+    if lane_spread < 10:
+        confidence = "low"       # 各車道速度太接近，難以判斷
+    elif diff < 8:
+        confidence = "high"      # 跟最接近車道差距小
+    elif diff < 15:
+        confidence = "medium"
+    else:
+        confidence = "low"       # 跟所有車道都差很多
+
+    return {
+        "lane_name": best_match.lane_name,
+        "confidence": confidence,
+        "speed_diff": round(diff, 1),
+        "lane_spread": round(lane_spread, 1),
+    }
+
+
+# 11. API 輸出
+# ============================================================
+
+def to_api_response(station, advice, user_speed=None):
     if advice is None:
         return {
             "vd_id": station.vd_id,
@@ -932,6 +972,10 @@ def to_api_response(station, advice):
             "lanes": [],
             "advice": None,
         }
+    estimated_lane = None
+    if user_speed is not None:
+        estimated_lane = estimate_current_lane(user_speed, advice.scores)
+
     return {
         "vd_id": station.vd_id,
         "road": f"國{station.road_id}",
@@ -951,7 +995,8 @@ def to_api_response(station, advice):
             "speed_diff": advice.speed_diff, "confidence": advice.confidence,
             "action": advice.action, "message": advice.message,
             "shoulder_note": advice.shoulder_note or None
-        }
+        },
+        "estimated_lane": estimated_lane,
     }
 
 
