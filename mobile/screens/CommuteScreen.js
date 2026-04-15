@@ -224,12 +224,7 @@ export default function CommuteScreen() {
         </View>
       )}
 
-      {/* 新增按鈕 */}
-      <TouchableOpacity style={styles.addBtn}>
-        <Text style={styles.addBtnText}>+ 新增通勤路線</Text>
-      </TouchableOpacity>
-
-      <Text style={styles.footer}>通勤推播需要開啟通知權限</Text>
+      <Text style={styles.footer}>即時路況每 60 秒自動更新</Text>
     </ScrollView>
   );
 }
@@ -265,7 +260,5 @@ const styles = StyleSheet.create({
   pushContent: { flex: 1 },
   pushMsg: { color: COLORS.lightGray, fontSize: 12, lineHeight: 18 },
   pushMeta: { color: COLORS.dimGray, fontSize: 10, marginTop: 4 },
-  addBtn: { marginHorizontal: 16, marginTop: 12, borderWidth: 1, borderStyle: 'dashed', borderColor: '#444', borderRadius: 12, padding: 14, alignItems: 'center' },
-  addBtnText: { color: COLORS.dimGray, fontSize: 14 },
   footer: { color: COLORS.dimGray, fontSize: 10, textAlign: 'center', padding: 20 },
 });

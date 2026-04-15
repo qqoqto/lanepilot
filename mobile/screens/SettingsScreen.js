@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View, ScrollView, Switch, TouchableOpacity } from 'react-native';
+import { StyleSheet, Text, View, ScrollView, Switch, TouchableOpacity, Linking } from 'react-native';
 import { COLORS } from '../constants';
 import { useSettings } from '../SettingsContext';
 
@@ -45,13 +45,7 @@ function SegmentControl({ options, selected, onSelect }) {
 }
 
 export default function SettingsScreen() {
-  const {
-    sensitivity, setSensitivity,
-    voice, setVoice,
-    commutePush, setCommutePush,
-    enroutePush, setEnroutePush,
-    bottleneckAlert, setBottleneckAlert,
-  } = useSettings();
+  const { sensitivity, setSensitivity } = useSettings();
 
   const sensitivityOptions = [
     { label: '10', value: 10 },
@@ -69,32 +63,17 @@ export default function SettingsScreen() {
         <SettingRow label="建議靈敏度" sub={`速差 >= ${sensitivity} km/h 才提醒切換`} right={
           <SegmentControl options={sensitivityOptions} selected={sensitivity} onSelect={setSensitivity} />
         } />
-        <SettingToggle label="語音播報" sub="自動唸出車道建議" value={voice} onToggle={setVoice} />
-        <SettingValue label="語音語言" value="中文" accent />
-      </View>
-
-      {/* 通知 */}
-      <Text style={styles.sectionTitle}>通知</Text>
-      <View style={styles.group}>
-        <SettingToggle label="通勤推播" sub="出發前 10 分鐘" value={commutePush} onToggle={setCommutePush} />
-        <SettingToggle label="途中更新" sub="上國道後每 5 分鐘" value={enroutePush} onToggle={setEnroutePush} />
-        <SettingToggle label="瓶頸警報" sub="前方突然壅塞時提醒" value={bottleneckAlert} onToggle={setBottleneckAlert} />
-      </View>
-
-      {/* 顯示 */}
-      <Text style={styles.sectionTitle}>顯示</Text>
-      <View style={styles.group}>
-        <SettingValue label="深色模式" value="跟隨系統" accent />
         <SettingValue label="速度單位" value="km/h" />
-        <SettingValue label="地圖樣式" value="簡約深色" />
       </View>
 
       {/* 關於 */}
       <Text style={styles.sectionTitle}>關於</Text>
       <View style={styles.group}>
-        <SettingValue label="版本" value="1.3.0 (MVP)" />
+        <SettingValue label="版本" value="1.0.0" />
         <SettingValue label="資料來源" value="高公局交通資料庫" />
-        <SettingValue label="GitHub" value="qqoqto/lanepilot" accent />
+        <TouchableOpacity onPress={() => Linking.openURL('https://qqoqto.github.io/lanepilot/privacy-policy.html')}>
+          <SettingValue label="隱私權政策" value="查看 →" accent />
+        </TouchableOpacity>
       </View>
 
       <Text style={styles.credit}>路道通 LanePilot{'\n'}資料來源：交通部高速公路局「交通資料庫」</Text>
