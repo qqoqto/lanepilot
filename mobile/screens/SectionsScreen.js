@@ -24,7 +24,13 @@ async function fetchWithRetry(url, { retries = 3, delay = 3000 } = {}) {
 const ROADS = [
   { label: '國1', value: '1' },
   { label: '國3', value: '3' },
+  { label: '國5', value: '5' },
   { label: '國1高架', value: '1H' },
+  { label: '國2', value: '2' },
+  { label: '國4', value: '4' },
+  { label: '國6', value: '6' },
+  { label: '國8', value: '8' },
+  { label: '國10', value: '10' },
 ];
 
 const SEGMENTS = {
@@ -57,13 +63,39 @@ const SEGMENTS = {
     { label: '白河-高雄', km_min: 340, km_max: 400 },
     { label: '全路段', km_min: 0, km_max: 999 },
   ],
+  '5': [
+    { label: '南港-坪林', km_min: 0, km_max: 22 },
+    { label: '坪林-頭城(雪隧)', km_min: 22, km_max: 40 },
+    { label: '頭城-蘇澳', km_min: 40, km_max: 54 },
+    { label: '全路段', km_min: 0, km_max: 999 },
+  ],
   '1H': [
     { label: '汐止-中壢', km_min: 12, km_max: 33 },
     { label: '全路段', km_min: 0, km_max: 999 },
   ],
+  '2': [
+    { label: '桃園-鶯歌', km_min: 0, km_max: 20 },
+    { label: '全路段', km_min: 0, km_max: 999 },
+  ],
+  '4': [
+    { label: '清水-豐原', km_min: 0, km_max: 18 },
+    { label: '全路段', km_min: 0, km_max: 999 },
+  ],
+  '6': [
+    { label: '霧峰-埔里', km_min: 0, km_max: 37 },
+    { label: '全路段', km_min: 0, km_max: 999 },
+  ],
+  '8': [
+    { label: '台南-新化', km_min: 0, km_max: 13 },
+    { label: '全路段', km_min: 0, km_max: 999 },
+  ],
+  '10': [
+    { label: '左營-旗山', km_min: 0, km_max: 34 },
+    { label: '全路段', km_min: 0, km_max: 999 },
+  ],
 };
 
-const DEFAULT_SEG = { '1': 3, '3': 3, '1H': 0 };
+const DEFAULT_SEG = { '1': 3, '3': 3, '5': 1, '1H': 0, '2': 0, '4': 0, '6': 0, '8': 0, '10': 0 };
 const PREVIEW_COUNT = 12;
 
 // =====================================================
@@ -130,6 +162,7 @@ export default function SectionsScreen() {
 
   const segments = SEGMENTS[road] || [];
   const seg = segments[segIdx] || segments[0];
+  const isEW = ['2', '4', '6', '8', '10'].includes(road);
 
   const fetchData = useCallback(async () => {
     try {
@@ -163,6 +196,8 @@ export default function SectionsScreen() {
     setError(null);
     setRoad(newRoad);
     setSegIdx(DEFAULT_SEG[newRoad] || 0);
+    const newIsEW = ['2', '4', '6', '8', '10'].includes(newRoad);
+    setDir(newIsEW ? 'E' : 'N');
   };
 
   const stations = data?.stations || [];
@@ -177,22 +212,22 @@ export default function SectionsScreen() {
       <Text style={styles.pageTitle}>路段總覽</Text>
 
       {/* 國道選擇 */}
-      <View style={styles.pickerRow}>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pickerScroll} contentContainerStyle={styles.pickerContainer}>
         {ROADS.map(r => (
           <TouchableOpacity key={r.value} style={[styles.pickerBtn, road === r.value && styles.pickerActive]}
             onPress={() => switchRoad(r.value)}>
             <Text style={[styles.pickerText, road === r.value && styles.pickerActiveText]}>{r.label}</Text>
           </TouchableOpacity>
         ))}
-      </View>
+      </ScrollView>
 
       {/* 方向選擇 */}
       <View style={styles.dirRow}>
-        <TouchableOpacity style={[styles.dirBtn, dir === 'N' && styles.dirActive]} onPress={() => { setError(null); setDir('N'); }}>
-          <Text style={[styles.dirText, dir === 'N' && styles.dirActiveText]}>北向</Text>
+        <TouchableOpacity style={[styles.dirBtn, dir === (isEW ? 'E' : 'N') && styles.dirActive]} onPress={() => { setError(null); setDir(isEW ? 'E' : 'N'); }}>
+          <Text style={[styles.dirText, dir === (isEW ? 'E' : 'N') && styles.dirActiveText]}>{isEW ? '東向' : '北向'}</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[styles.dirBtn, dir === 'S' && styles.dirActive]} onPress={() => { setError(null); setDir('S'); }}>
-          <Text style={[styles.dirText, dir === 'S' && styles.dirActiveText]}>南向</Text>
+        <TouchableOpacity style={[styles.dirBtn, dir === (isEW ? 'W' : 'S') && styles.dirActive]} onPress={() => { setError(null); setDir(isEW ? 'W' : 'S'); }}>
+          <Text style={[styles.dirText, dir === (isEW ? 'W' : 'S') && styles.dirActiveText]}>{isEW ? '西向' : '南向'}</Text>
         </TouchableOpacity>
       </View>
 
@@ -295,8 +330,9 @@ const styles = StyleSheet.create({
   scroll: { flex: 1, backgroundColor: COLORS.bg },
   pageTitle: { color: COLORS.white, fontSize: 22, fontWeight: '600', paddingHorizontal: 20, paddingTop: 20, paddingBottom: 12 },
 
-  pickerRow: { flexDirection: 'row', paddingHorizontal: 16, gap: 8, marginBottom: 8 },
-  pickerBtn: { flex: 1, backgroundColor: COLORS.card, borderRadius: 8, padding: 10, alignItems: 'center' },
+  pickerScroll: { marginBottom: 8 },
+  pickerContainer: { paddingHorizontal: 16, gap: 8 },
+  pickerBtn: { backgroundColor: COLORS.card, borderRadius: 8, paddingHorizontal: 14, paddingVertical: 10, alignItems: 'center' },
   pickerActive: { backgroundColor: COLORS.greenBg },
   pickerText: { color: COLORS.lightGray, fontSize: 13 },
   pickerActiveText: { color: COLORS.white, fontWeight: '500' },

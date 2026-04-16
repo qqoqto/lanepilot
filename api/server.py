@@ -79,8 +79,9 @@ class VDCache:
                 self.data_source = "TDX" if tdx_data else "tisvcloud"
 
                 # 預解析常用路段 (國1 全線)
-                for road in ["1", "1H", "3"]:
-                    for direction in ["N", "S"]:
+                for road in ["1", "1H", "3", "5", "2", "4", "6", "8", "10"]:
+                    dirs = ["E", "W"] if road in ("2", "4", "6", "8", "10") else ["N", "S"]
+                    for direction in dirs:
                         key = (road, direction)
                         if tdx_data:
                             stations = parse_vd_json(
@@ -208,7 +209,7 @@ def system_status():
 @app.get("/api/v1/lanes/realtime")
 def lanes_realtime(
     road: str = Query("1", description="國道編號: 1, 1H, 3, 5"),
-    dir: str = Query("N", description="方向: N=北向, S=南向"),
+    dir: str = Query("N", description="方向: N=北向, S=南向, E=東向, W=西向"),
     km: float = Query(None, description="里程 (找最近的 VD 站)"),
     km_min: float = Query(None, description="起始里程"),
     km_max: float = Query(None, description="結束里程"),
@@ -251,7 +252,7 @@ def lanes_realtime(
 
     return {
         "road": f"國{road}",
-        "direction": "北向" if dir == "N" else "南向",
+        "direction": {"N": "北向", "S": "南向", "E": "東向", "W": "西向"}.get(dir, dir),
         "range": f"{km_min}K ~ {km_max}K",
         "count": len(results),
         "data_time": cache.last_update.isoformat() if cache.last_update else None,
@@ -303,7 +304,7 @@ def sections(
 
     return {
         "road": f"國{road}",
-        "direction": "北向" if dir == "N" else "南向",
+        "direction": {"N": "北向", "S": "南向", "E": "東向", "W": "西向"}.get(dir, dir),
         "range": f"{km_min}K ~ {km_max}K",
         "summary": {
             "station_count": len(results),
@@ -334,7 +335,7 @@ def bottlenecks(
 
     return {
         "road": f"國{road}",
-        "direction": "北向" if dir == "N" else "南向",
+        "direction": {"N": "北向", "S": "南向", "E": "東向", "W": "西向"}.get(dir, dir),
         "count": len(bns),
         "bottlenecks": [{
             "start": bn.start_station,
@@ -375,7 +376,7 @@ def _get_nearby_roads_summary(lat, lon, max_roads=6):
         else:
             level = "壅塞"
             color = "#E24B4A"
-        dir_label = "北向" if direction == "N" else "南向"
+        dir_label = {"N": "北向", "S": "南向", "E": "東向", "W": "西向"}.get(direction, direction)
         summaries.append({
             "road": road,
             "road_name": nr["road_name"],
@@ -441,7 +442,7 @@ def nearby(
     return {
         "nearest": nearest,
         "road": nearest["road_name"],
-        "direction": "北向" if direction == "N" else "南向",
+        "direction": {"N": "北向", "S": "南向", "E": "東向", "W": "西向"}.get(direction, direction),
         "your_km": round(mileage, 1),
         "range": f"{round(km_min, 1)}K ~ {round(km_max, 1)}K",
         "summary": {

@@ -3,6 +3,12 @@ import { StyleSheet, Text, View, ScrollView, RefreshControl, TouchableOpacity, D
 import * as Location from 'expo-location';
 import { API_BASE, COLORS, getLaneColor } from '../constants';
 import { useSettings } from '../SettingsContext';
+import { findNearbyCamera } from '../data/speedCameras';
+import {
+  announceCamera, announceLaneAdvice, announceBottleneck,
+  announcePrediction, announceHighwayEntry, announceHighwayExit,
+  updateSpeedHistory, setVoiceEnabled, isVoiceEnabled,
+} from '../utils/voiceCoach';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -50,9 +56,33 @@ const INTERCHANGES = {
     { name: '善化', km: 360 }, { name: '新化系統', km: 370 }, { name: '關廟', km: 380 },
     { name: '田寮', km: 390 }, { name: '燕巢系統', km: 400 },
   ],
+  '5': [
+    { name: '南港系統', km: 0 }, { name: '石碇', km: 10.9 }, { name: '坪林', km: 22 },
+    { name: '頭城', km: 39.2 }, { name: '宜蘭', km: 46.5 }, { name: '羅東', km: 48.2 },
+    { name: '蘇澳', km: 54.3 },
+  ],
   '1H': [
     { name: '汐止端', km: 12.7 }, { name: '五股轉接', km: 19.3 },
     { name: '中和', km: 24 }, { name: '板橋', km: 26 }, { name: '中壢端', km: 33 },
+  ],
+  '2': [
+    { name: '桃園', km: 0 }, { name: '南桃園', km: 4 }, { name: '大湳', km: 7.2 },
+    { name: '鶯歌系統', km: 15.5 }, { name: '機場端', km: 20.3 },
+  ],
+  '4': [
+    { name: '清水端', km: 0 }, { name: '神岡', km: 7.4 }, { name: '潭子系統', km: 12 },
+    { name: '豐原端', km: 17.7 },
+  ],
+  '6': [
+    { name: '霧峰系統', km: 0 }, { name: '草屯', km: 9.6 }, { name: '國姓', km: 21.1 },
+    { name: '愛蘭', km: 30 }, { name: '埔里端', km: 37 },
+  ],
+  '8': [
+    { name: '台南系統', km: 0 }, { name: '新市', km: 6 }, { name: '新化端', km: 13.2 },
+  ],
+  '10': [
+    { name: '左營端', km: 0 }, { name: '仁武', km: 7 }, { name: '燕巢系統', km: 13.7 },
+    { name: '旗山端', km: 33.7 },
   ],
 };
 
@@ -155,6 +185,11 @@ export default function RealtimeScreen() {
   const [userSpeed, setUserSpeed] = useState(null);           // GPS 速度 (km/h)
   const [currentLane, setCurrentLane] = useState(null);       // 推測/手動選的車道名稱
   const [laneManualOverride, setLaneManualOverride] = useState(false); // 是否手動選過
+  const [nearbyCamera, setNearbyCamera] = useState(null);     // 附近測速照相
+  const [userCoords, setUserCoords] = useState(null);         // GPS 座標
+  const [userAltitude, setUserAltitude] = useState(null);     // GPS 海拔 (公尺)
+  const [voiceOn, setVoiceOn] = useState(true);               // 語音開關
+  const wasOnHighwayRef = useRef(false);                      // 追蹤上次是否在國道上
 
   const fetchAll = useCallback(async () => {
     try {
@@ -169,10 +204,13 @@ export default function RealtimeScreen() {
       const loc = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
       });
-      const { latitude, longitude, speed: gpsSpeed } = loc.coords;
+      const { latitude, longitude, speed: gpsSpeed, altitude: gpsAltitude } = loc.coords;
       // GPS speed 是 m/s，轉成 km/h；靜止或無效時為 null
       const speedKmh = (gpsSpeed != null && gpsSpeed >= 0) ? Math.round(gpsSpeed * 3.6) : null;
+      const altMeters = (gpsAltitude != null && gpsAltitude >= 0) ? Math.round(gpsAltitude) : null;
       setUserSpeed(speedKmh);
+      setUserCoords({ latitude, longitude });
+      setUserAltitude(altMeters);
 
       setApiError(null);
       setGpsError(null);
@@ -180,13 +218,23 @@ export default function RealtimeScreen() {
         `${API_BASE}/api/v1/nearby?lat=${latitude}&lon=${longitude}`
       );
       if (!nearbyResp.ok) {
+        // 無法取得路況時，不帶過濾偵測測速照相
+        setNearbyCamera(findNearbyCamera(latitude, longitude));
         setApiError('目前無法取得路況資料，請稍後再試');
         return;
       }
       const nearbyJson = await nearbyResp.json();
       setGpsData(nearbyJson);
 
-      const { road, direction, mileage } = nearbyJson.nearest || {};
+      const { road, direction, mileage, distance_km } = nearbyJson.nearest || {};
+      // 測速照相偵測：在國道上時只比對同路線同方向，避免高架/平面誤報
+      const dirLabel_ = direction === 'N' ? '北向' : direction === 'S' ? '南向' : null;
+      if (road && distance_km != null && distance_km <= 1) {
+        setNearbyCamera(findNearbyCamera(latitude, longitude, { road, direction: dirLabel_, altitude: altMeters }));
+      } else {
+        // 不在國道上，不顯示國道測速照相（避免平面路收到高架的提醒）
+        setNearbyCamera(null);
+      }
       if (road && direction && mileage) {
         const speedParam = speedKmh != null ? `&speed=${speedKmh}` : '';
         const laneResp = await fetchWithRetry(
@@ -201,11 +249,37 @@ export default function RealtimeScreen() {
           }
           setLaneData(laneJson);
           // 自動偵測車道（如果使用者沒有手動選過）
+          const estimatedLane = (!laneManualOverride && laneJson.estimated_lane?.confidence !== 'low')
+            ? (laneJson.estimated_lane?.lane_name || null) : currentLane;
           if (!laneManualOverride && laneJson.estimated_lane?.confidence !== 'low') {
-            setCurrentLane(laneJson.estimated_lane?.lane_name || null);
+            setCurrentLane(estimatedLane);
+          }
+
+          // === 語音教練 ===
+          const mainLanes_ = (laneJson.lanes || []).filter(l => !l.is_shoulder);
+          updateSpeedHistory(mainLanes_);
+          // 預測式：偵測車道減速趨勢
+          if (!announcePrediction(mainLanes_, estimatedLane)) {
+            // 沒有預測播報時，才播車道建議
+            announceLaneAdvice(laneJson.advice, estimatedLane, sensitivity);
           }
         }
       }
+
+      // 語音：進入/離開國道偵測
+      const onHighway = road && distance_km != null && distance_km <= 1;
+      const roadFullName = nearbyJson.road || '';
+      if (onHighway && !wasOnHighwayRef.current) {
+        announceHighwayEntry(roadFullName, dirLabel_);
+      } else if (!onHighway && wasOnHighwayRef.current) {
+        announceHighwayExit();
+      }
+      wasOnHighwayRef.current = onHighway;
+
+      // 語音：壅塞預警
+      const bns = nearbyJson.bottlenecks || [];
+      if (bns.length > 0) announceBottleneck(bns);
+
       setCountdown(30);
     } catch (e) {
       if (!gpsData) setApiError('網路連線異常，請確認網路後下拉重新整理');
@@ -226,6 +300,32 @@ export default function RealtimeScreen() {
     return () => clearInterval(timer);
   }, []);
 
+  // 語音：測速照相提醒（當 nearbyCamera 變化時）
+  useEffect(() => {
+    if (nearbyCamera) announceCamera(nearbyCamera, userSpeed);
+  }, [nearbyCamera?.distance]);
+
+  // 高頻 GPS 更新（時速表用，每 2 秒）
+  // 測速照相偵測由 fetchAll 處理（有路線資訊可精確過濾）
+  useEffect(() => {
+    let sub = null;
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return;
+      sub = await Location.watchPositionAsync(
+        { accuracy: Location.Accuracy.High, timeInterval: 2000, distanceInterval: 5 },
+        (loc) => {
+          const { latitude, longitude, speed: gpsSpeed, altitude: gpsAlt } = loc.coords;
+          const speedKmh = (gpsSpeed != null && gpsSpeed >= 0) ? Math.round(gpsSpeed * 3.6) : null;
+          setUserSpeed(speedKmh);
+          setUserCoords({ latitude, longitude });
+          setUserAltitude((gpsAlt != null && gpsAlt >= 0) ? Math.round(gpsAlt) : null);
+        }
+      );
+    })();
+    return () => { if (sub) sub.remove(); };
+  }, []);
+
   // 解析資料
   const road = gpsData?.nearest?.road;
   const yourKm = gpsData?.your_km;
@@ -244,6 +344,7 @@ export default function RealtimeScreen() {
   const bottlenecks = gpsData?.bottlenecks || [];
   const summary = gpsData?.summary;
   const nearbyRoads = gpsData?.nearby_roads || [];
+  const isOnHighway = gpsData && distKm != null && distKm <= 1;
 
   return (
     <ScrollView
@@ -259,6 +360,12 @@ export default function RealtimeScreen() {
             : '等待 GPS 定位'}
         </Text>
         {gpsData && <Text style={styles.topBarCountdown}>{countdown}s</Text>}
+        <TouchableOpacity
+          style={styles.voiceToggle}
+          onPress={() => { const next = !voiceOn; setVoiceOn(next); setVoiceEnabled(next); }}
+        >
+          <Text style={styles.voiceToggleText}>{voiceOn ? '🔊' : '🔇'}</Text>
+        </TouchableOpacity>
       </View>
 
       {/* ============ 載入/錯誤狀態 ============ */}
@@ -289,8 +396,77 @@ export default function RealtimeScreen() {
         </View>
       )}
 
-      {/* ============ 主要內容（GPS 成功後） ============ */}
-      {gpsData && !loading && (
+      {/* ============ 測速照相提醒（全域） ============ */}
+      {nearbyCamera && !loading && (() => {
+        const isOver = userSpeed != null && userSpeed > nearbyCamera.speedLimit;
+        return (
+          <View style={[styles.cameraAlert, isOver && styles.cameraAlertOver]}>
+            <View style={[styles.cameraIconCircle, isOver && styles.cameraIconCircleOver]}>
+              <Text style={styles.cameraAlertIcon}>{isOver ? '!' : '+'}</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.cameraAlertTitle, isOver && { color: '#ff6b6b' }]}>
+                測速照相 {nearbyCamera.distance}m
+              </Text>
+              <Text style={styles.cameraAlertSub}>
+                限速 {nearbyCamera.speedLimit} · {nearbyCamera.name}
+              </Text>
+            </View>
+            <View style={[styles.cameraLimitBadge, isOver && styles.cameraLimitBadgeOver]}>
+              <Text style={[styles.cameraLimitNum, isOver && { color: '#ff4040' }]}>{nearbyCamera.speedLimit}</Text>
+              <Text style={styles.cameraLimitUnit}>km/h</Text>
+            </View>
+          </View>
+        );
+      })()}
+
+      {/* ============ 非國道模式：大字時速表 ============ */}
+      {gpsData && !loading && !isOnHighway && (() => {
+        const speed = userSpeed != null ? userSpeed : 0;
+        const speedColor = speed > 110 ? '#FF3B30' : speed > 60 ? '#FFFFFF' : '#8E8E93';
+        const ringSize = Math.min(SCREEN_WIDTH - 80, 280);
+        const accentBlue = '#0A84FF';
+        return (
+          <>
+            <View style={styles.speedometerContainer}>
+              {/* 圓形速度面板 */}
+              <View style={[styles.speedRing, { width: ringSize, height: ringSize, borderRadius: ringSize / 2 }]}>
+                <View style={[styles.speedRingInner, {
+                  width: ringSize - 8, height: ringSize - 8, borderRadius: (ringSize - 8) / 2,
+                  borderColor: speed > 110 ? '#FF3B3040' : accentBlue + '25',
+                }]}>
+                  <View style={[styles.speedRingCore, {
+                    width: ringSize - 24, height: ringSize - 24, borderRadius: (ringSize - 24) / 2,
+                  }]}>
+                    <Text style={[styles.speedometerValue, { color: speedColor }]}>
+                      {userSpeed != null ? userSpeed : '--'}
+                    </Text>
+                    <Text style={styles.speedometerUnit}>km/h</Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* 速度刻度 */}
+              <View style={styles.speedIndicatorRow}>
+                {[0, 30, 60, 90, 120].map(v => (
+                  <View key={v} style={styles.speedIndicatorItem}>
+                    <View style={[
+                      styles.speedIndicatorBar,
+                      speed >= v && { backgroundColor: speed > 110 ? '#FF3B30' : accentBlue },
+                    ]} />
+                    <Text style={[styles.speedIndicatorText, speed >= v && { color: '#98989D' }]}>{v}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+
+            <Text style={styles.footer}>每 30 秒更新</Text>
+          </>
+        );
+      })()}
+
+      {/* ============ 主要內容（國道模式） ============ */}
+      {gpsData && !loading && isOnHighway && (
         <>
           {/* — 位置標題 — */}
           <View style={styles.locationRow}>
@@ -389,39 +565,6 @@ export default function RealtimeScreen() {
               )}
             </View>
           ))}
-
-          {/* — 距離國道太遠 — */}
-          {distKm > 1 && (
-            <View style={styles.farBanner}>
-              <Text style={styles.farText}>⚠ 距離國道 {distKm}km，為參考值</Text>
-            </View>
-          )}
-
-          {/* — 附近國道路況（不在國道上時顯示） — */}
-          {nearbyRoads.length > 0 && distKm > 1 && (
-            <View style={styles.nearbySection}>
-              <Text style={styles.nearbySectionTitle}>附近國道路況</Text>
-              {nearbyRoads.map((nr, idx) => {
-                const nrIc = findNearestInterchange(nr.road, nr.mileage);
-                return (
-                  <View key={idx} style={styles.nearbyCard}>
-                    <View style={styles.nearbyCardLeft}>
-                      <Text style={styles.nearbyRoadName}>{nr.road_name} {nr.direction}</Text>
-                      {nrIc && <Text style={styles.nearbyIcName}>近 {nrIc.name}</Text>}
-                      <Text style={styles.nearbyDistance}>距離 {nr.distance_km} km</Text>
-                    </View>
-                    <View style={styles.nearbyCardRight}>
-                      <View style={[styles.nearbySpeedBadge, { backgroundColor: nr.color + '22' }]}>
-                        <Text style={[styles.nearbySpeed, { color: nr.color }]}>{nr.avg_speed}</Text>
-                        <Text style={[styles.nearbySpeedUnit, { color: nr.color }]}>km/h</Text>
-                      </View>
-                      <Text style={[styles.nearbyLevel, { color: nr.color }]}>{nr.level}</Text>
-                    </View>
-                  </View>
-                );
-              })}
-            </View>
-          )}
 
           {/* — 前方瓶頸（有才顯示） — */}
           {bottlenecks.length > 0 && (
@@ -539,26 +682,28 @@ export default function RealtimeScreen() {
 // 樣式 - 駕駛模式：大字、高對比、少資訊
 // =====================================================
 const styles = StyleSheet.create({
-  scroll: { flex: 1, backgroundColor: '#0a0a0c' },
+  scroll: { flex: 1, backgroundColor: '#000000' },
 
   // 頂部 GPS 條
   topBar: {
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 16, paddingVertical: 10, gap: 8,
-    backgroundColor: '#111114',
+    backgroundColor: '#1C1C1E',
   },
-  gpsDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#444' },
-  gpsDotActive: { backgroundColor: '#22c55e' },
-  topBarText: { flex: 1, color: '#888', fontSize: 12 },
-  topBarCountdown: { color: '#555', fontSize: 11 },
+  gpsDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#3A3A3C' },
+  gpsDotActive: { backgroundColor: '#30D158' },
+  topBarText: { flex: 1, color: '#8E8E93', fontSize: 12 },
+  topBarCountdown: { color: '#48484A', fontSize: 11 },
+  voiceToggle: { paddingHorizontal: 8, paddingVertical: 4 },
+  voiceToggleText: { fontSize: 16 },
 
   // 載入/錯誤
   centerBox: { alignItems: 'center', paddingVertical: 100, paddingHorizontal: 40 },
   centerIcon: { fontSize: 48, marginBottom: 16 },
-  centerTitle: { color: '#ccc', fontSize: 18, fontWeight: '500', textAlign: 'center' },
-  centerHint: { color: '#666', fontSize: 13, marginTop: 8, textAlign: 'center' },
-  retryBtn: { marginTop: 24, backgroundColor: '#0f3d2e', borderRadius: 10, paddingHorizontal: 28, paddingVertical: 12 },
-  retryText: { color: '#5DCAA5', fontSize: 14, fontWeight: '600' },
+  centerTitle: { color: '#E5E5EA', fontSize: 18, fontWeight: '500', textAlign: 'center' },
+  centerHint: { color: '#636366', fontSize: 13, marginTop: 8, textAlign: 'center' },
+  retryBtn: { marginTop: 24, backgroundColor: '#0A84FF20', borderRadius: 12, paddingHorizontal: 28, paddingVertical: 12 },
+  retryText: { color: '#0A84FF', fontSize: 14, fontWeight: '600' },
 
   // 位置標題
   locationRow: { paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4 },
@@ -638,17 +783,18 @@ const styles = StyleSheet.create({
     marginHorizontal: 16, marginTop: 4, marginBottom: 12,
   },
   nearbySectionTitle: {
-    color: '#888', fontSize: 13, fontWeight: '600', marginBottom: 10,
+    color: '#8E8E93', fontSize: 13, fontWeight: '600', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5,
   },
   nearbyCard: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    backgroundColor: '#151518', borderRadius: 14, padding: 16,
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#1C1C1E', borderRadius: 12, padding: 14,
     marginBottom: 8,
   },
+  nearbyDotLine: { width: 3, height: '80%', borderRadius: 1.5, marginRight: 12 },
   nearbyCardLeft: { flex: 1 },
-  nearbyRoadName: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  nearbyIcName: { color: '#aaa', fontSize: 12, marginTop: 2 },
-  nearbyDistance: { color: '#666', fontSize: 11, marginTop: 3 },
+  nearbyRoadName: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
+  nearbyIcName: { color: '#8E8E93', fontSize: 12, marginTop: 3 },
+  nearbyDistance: { color: '#636366', fontSize: 11, marginTop: 3 },
   nearbyCardRight: { alignItems: 'flex-end' },
   nearbySpeedBadge: {
     borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6,
@@ -656,7 +802,7 @@ const styles = StyleSheet.create({
   },
   nearbySpeed: { fontSize: 24, fontWeight: '700' },
   nearbySpeedUnit: { fontSize: 11 },
-  nearbyLevel: { fontSize: 11, fontWeight: '500', marginTop: 4 },
+  nearbyLevel: { fontSize: 10, fontWeight: '600', marginTop: 3, letterSpacing: 0.5 },
 
   // ===== 瓶頸 =====
   bnSection: {
@@ -717,5 +863,63 @@ const styles = StyleSheet.create({
   routeAdviceText: { color: '#5DCAA5', fontSize: 12, fontWeight: '500' },
   routeMore: { color: '#444', fontSize: 11, textAlign: 'center', paddingVertical: 8 },
 
-  footer: { color: '#333', fontSize: 9, textAlign: 'center', paddingVertical: 20 },
+  footer: { color: '#3A3A3C', fontSize: 9, textAlign: 'center', paddingVertical: 20 },
+
+  // ===== 測速照相提醒 =====
+  cameraAlert: {
+    flexDirection: 'row', alignItems: 'center', gap: 14,
+    marginHorizontal: 16, marginTop: 12,
+    backgroundColor: '#1C1C1E', borderRadius: 14, padding: 14,
+  },
+  cameraAlertOver: {
+    backgroundColor: '#2C1215',
+  },
+  cameraIconCircle: {
+    width: 42, height: 42, borderRadius: 21,
+    backgroundColor: '#FF9F0A20', alignItems: 'center', justifyContent: 'center',
+  },
+  cameraIconCircleOver: { backgroundColor: '#FF3B3025' },
+  cameraAlertIcon: { color: '#FF9F0A', fontSize: 18, fontWeight: '800' },
+  cameraAlertTitle: { color: '#FFFFFF', fontSize: 15, fontWeight: '600' },
+  cameraAlertSub: { color: '#8E8E93', fontSize: 12, marginTop: 2 },
+  cameraLimitBadge: {
+    alignItems: 'center', backgroundColor: '#2C2C2E', borderRadius: 10,
+    paddingHorizontal: 12, paddingVertical: 6, minWidth: 52,
+  },
+  cameraLimitBadgeOver: { backgroundColor: '#3A1518' },
+  cameraLimitNum: { color: '#FF9F0A', fontSize: 22, fontWeight: '700' },
+  cameraLimitUnit: { color: '#636366', fontSize: 9, marginTop: 1 },
+
+  // ===== 非國道時速表 =====
+  speedometerContainer: {
+    alignItems: 'center', paddingTop: 50, paddingBottom: 30,
+  },
+  speedRing: {
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#1C1C1E',
+  },
+  speedRingInner: {
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 4,
+  },
+  speedRingCore: {
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#000000',
+  },
+  speedometerValue: {
+    fontSize: 88, fontWeight: '200', lineHeight: 100,
+    fontVariant: ['tabular-nums'],
+  },
+  speedometerUnit: {
+    color: '#636366', fontSize: 16, fontWeight: '500', marginTop: 2, letterSpacing: 0.5,
+  },
+  speedIndicatorRow: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    marginTop: 24, paddingHorizontal: 40, width: '100%',
+  },
+  speedIndicatorItem: { alignItems: 'center', gap: 6 },
+  speedIndicatorBar: {
+    width: 3, height: 14, borderRadius: 1.5, backgroundColor: '#2C2C2E',
+  },
+  speedIndicatorText: { color: '#3A3A3C', fontSize: 10, fontVariant: ['tabular-nums'] },
 });
