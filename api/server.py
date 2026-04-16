@@ -10,6 +10,7 @@ API 端點:
   GET /api/v1/sections           路段總覽 (多站 + 瓶頸)
   GET /api/v1/bottlenecks        當前瓶頸列表
   GET /api/v1/status             系統狀態 (資料更新時間, 站數)
+  GET /api/v1/speed-cameras      全台測速照相位置 (警政署開放資料)
 """
 
 import asyncio
@@ -138,10 +139,17 @@ cache = VDCache()
 # ============================================================
 
 async def vd_refresh_loop():
-    """每 60 秒抓一次 VD 資料"""
+    """每 120 秒抓一次 VD 資料"""
     while True:
         await cache.refresh()
         await asyncio.sleep(120)
+
+
+async def camera_refresh_loop():
+    """每 24 小時更新一次測速照相資料"""
+    while True:
+        await camera_cache.refresh()
+        await asyncio.sleep(86400)  # 24 小時
 
 
 @asynccontextmanager
@@ -149,10 +157,12 @@ async def lifespan(app: FastAPI):
     """應用啟動/關閉生命週期"""
     logger.info("LanePilot API 啟動中...")
     # 不等第一次抓取完成, 直接啟動, 背景排程會處理
-    task = asyncio.create_task(vd_refresh_loop())
-    logger.info("背景 VD 資料排程已啟動 (每 60 秒)")
+    vd_task = asyncio.create_task(vd_refresh_loop())
+    cam_task = asyncio.create_task(camera_refresh_loop())
+    logger.info("背景排程已啟動: VD (每 120 秒), 測速照相 (每 24 小時)")
     yield
-    task.cancel()
+    vd_task.cancel()
+    cam_task.cancel()
     logger.info("LanePilot API 關閉")
 
 
@@ -456,4 +466,132 @@ def nearby(
         "stations": results,
         "nearby_roads": _get_nearby_roads_summary(lat, lon),
         "data_time": cache.last_update.isoformat()
+    }
+
+
+# ============================================================
+# 測速照相 (警政署開放資料)
+# ============================================================
+
+import csv
+import io
+
+SPEED_CAMERA_CSV_URL = (
+    "https://opdadm.moi.gov.tw/api/v1/no-auth/resource/api/dataset/"
+    "EA5E6FCD-B82D-43B7-A5CF-E9893253187E/resource/"
+    "647D3838-B119-494A-8096-D4B852A3761E/download"
+)
+
+
+class SpeedCameraCache:
+    """測速照相快取，每天更新一次"""
+    def __init__(self):
+        self.cameras: list = []
+        self.last_update: datetime = None
+        self.last_error: str = ""
+
+    async def refresh(self):
+        """從警政署開放資料下載測速照相 CSV"""
+        try:
+            import httpx
+            loop = asyncio.get_event_loop()
+
+            def _fetch():
+                with httpx.Client(timeout=30, verify=False, follow_redirects=True) as client:
+                    resp = client.get(SPEED_CAMERA_CSV_URL)
+                    resp.raise_for_status()
+                    return resp.text
+
+            csv_text = await loop.run_in_executor(None, _fetch)
+
+            cameras = []
+            reader = csv.DictReader(io.StringIO(csv_text))
+            for row in reader:
+                try:
+                    lat = float(row.get("Latitude") or row.get("latitude") or 0)
+                    lon = float(row.get("Longitude") or row.get("longitude") or 0)
+                    limit = row.get("limit") or row.get("Limit") or "0"
+                    # 清除非數字字元
+                    limit_clean = ''.join(c for c in str(limit) if c.isdigit())
+                    speed_limit = int(limit_clean) if limit_clean else 0
+                except (ValueError, TypeError):
+                    continue
+
+                if lat == 0 or lon == 0 or speed_limit == 0:
+                    continue
+
+                cameras.append({
+                    "lat": lat,
+                    "lon": lon,
+                    "speedLimit": speed_limit,
+                    "direction": row.get("direct", ""),
+                    "address": row.get("Address") or row.get("address") or "",
+                    "city": row.get("CityName") or row.get("cityName") or "",
+                    "name": (row.get("CityName") or "") + " " + (row.get("Address") or ""),
+                })
+
+            self.cameras = cameras
+            self.last_update = datetime.now()
+            self.last_error = ""
+            logger.info(f"測速照相快取更新完成: {len(cameras)} 支")
+            return True
+
+        except Exception as e:
+            self.last_error = str(e)
+            logger.error(f"測速照相快取更新失敗: {e}")
+            return False
+
+
+camera_cache = SpeedCameraCache()
+
+
+@app.get("/api/v1/speed-cameras")
+async def speed_cameras(
+    lat: float = Query(None, description="使用者緯度（篩選附近）"),
+    lon: float = Query(None, description="使用者經度（篩選附近）"),
+    radius: float = Query(5, description="搜尋半徑 (km)，預設 5km"),
+):
+    """
+    全台測速照相位置
+
+    用法1: 取得全部
+      GET /api/v1/speed-cameras
+
+    用法2: 取得附近（省流量）
+      GET /api/v1/speed-cameras?lat=25.03&lon=121.56&radius=5
+    """
+    if not camera_cache.cameras:
+        await camera_cache.refresh()
+
+    if not camera_cache.cameras:
+        raise HTTPException(503, f"測速照相資料尚未載入: {camera_cache.last_error}")
+
+    cameras = camera_cache.cameras
+
+    # 如果有提供座標，只回傳附近的
+    if lat is not None and lon is not None:
+        import math
+        radius_m = radius * 1000
+
+        def _haversine(lat1, lon1, lat2, lon2):
+            R = 6371000
+            to_rad = math.radians
+            dlat = to_rad(lat2 - lat1)
+            dlon = to_rad(lon2 - lon1)
+            a = math.sin(dlat / 2) ** 2 + math.cos(to_rad(lat1)) * math.cos(to_rad(lat2)) * math.sin(dlon / 2) ** 2
+            return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+        nearby = []
+        for cam in cameras:
+            dist = _haversine(lat, lon, cam["lat"], cam["lon"])
+            if dist <= radius_m:
+                nearby.append({**cam, "distance": round(dist)})
+        nearby.sort(key=lambda c: c["distance"])
+        cameras = nearby
+
+    return {
+        "count": len(cameras),
+        "cameras": cameras,
+        "data_time": camera_cache.last_update.isoformat() if camera_cache.last_update else None,
+        "source": "內政部警政署測速執法設置點"
     }

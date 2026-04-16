@@ -1,11 +1,19 @@
 /**
- * 台灣國道固定式測速照相機位置
- * 資料來源：交通部高速公路局公告
+ * 台灣測速照相偵測
+ *
+ * 資料來源：
+ *   1. 警政署開放資料 API（全台所有道路，透過後端代理）
+ *   2. 內建國道資料（fallback，離線時使用）
  *
  * elevated: true 表示該照相位於高架路段
  * minAltitude: 海拔最低門檻 (公尺)，GPS 海拔高於此值才視為在高架上
  */
-export const SPEED_CAMERAS = [
+import { API_BASE } from '../constants';
+
+// =====================================================
+// 內建國道測速照相（fallback 用）
+// =====================================================
+const BUILTIN_CAMERAS = [
   // ===== 國道 1 號 =====
   // 北向
   { lat: 25.0647, lon: 121.4547, speedLimit: 100, road: '國1', direction: '北向', km: 33.5, name: '五股路段' },
@@ -71,7 +79,6 @@ export const SPEED_CAMERAS = [
   { lat: 23.4100, lon: 120.4100, speedLimit: 110, road: '國3', direction: '南向', km: 325.0, name: '中埔路段' },
 
   // ===== 國道 1 號高架 (elevated) =====
-  // 高架路面海拔約 25-40m，平面約 5-15m，門檻設 20m
   { lat: 25.0580, lon: 121.4720, speedLimit: 80, road: '國1高架', direction: '北向', km: 20.0, name: '五股高架段', elevated: true, minAltitude: 20 },
   { lat: 25.0200, lon: 121.4580, speedLimit: 80, road: '國1高架', direction: '北向', km: 25.0, name: '中和高架段', elevated: true, minAltitude: 20 },
   { lat: 24.9700, lon: 121.4300, speedLimit: 80, road: '國1高架', direction: '北向', km: 30.0, name: '板橋高架段', elevated: true, minAltitude: 20 },
@@ -80,9 +87,45 @@ export const SPEED_CAMERAS = [
   { lat: 24.9700, lon: 121.4300, speedLimit: 80, road: '國1高架', direction: '南向', km: 30.0, name: '板橋高架段', elevated: true, minAltitude: 20 },
 ];
 
+// =====================================================
+// API 即時資料（啟動時從後端抓取警政署全台資料）
+// =====================================================
+let apiCameras = null;
+let apiFetchTime = 0;
+const API_CACHE_MS = 3600000; // 快取 1 小時
+
+async function fetchApiCameras(lat, lon) {
+  const now = Date.now();
+  // 已有快取且未過期，直接用
+  if (apiCameras && (now - apiFetchTime) < API_CACHE_MS) {
+    return apiCameras;
+  }
+
+  try {
+    const params = (lat != null && lon != null)
+      ? `?lat=${lat}&lon=${lon}&radius=10`
+      : '';
+    const resp = await fetch(`${API_BASE}/api/v1/speed-cameras${params}`);
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    apiCameras = data.cameras || [];
+    apiFetchTime = now;
+    return apiCameras;
+  } catch (e) {
+    return null;
+  }
+}
+
 /**
- * Haversine 公式計算兩點距離 (公尺)
+ * 初始化：App 啟動時呼叫，預先載入 API 資料
  */
+export async function initSpeedCameras(lat, lon) {
+  await fetchApiCameras(lat, lon);
+}
+
+// =====================================================
+// Haversine 公式計算兩點距離 (公尺)
+// =====================================================
 export function getDistanceMeters(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const toRad = (d) => d * Math.PI / 180;
@@ -93,53 +136,67 @@ export function getDistanceMeters(lat1, lon1, lat2, lon2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// 國道編號對應 road 欄位 (API 回傳 '1','1H','3' → 資料用 '國1','國1高架','國3')
-const ROAD_MAP = { '1': '國1', '1H': '國1高架', '3': '國3' };
+// 國道編號對應 road 欄位
+const ROAD_MAP = { '1': '國1', '1H': '國1高架', '3': '國3', '5': '國5', '2': '國2', '4': '國4', '6': '國6', '8': '國8', '10': '國10' };
 
 /**
  * 找出指定範圍內最近的測速照相
  *
- * 判斷邏輯（三層過濾）：
- *   1. 路線過濾：已知在哪條國道時，只比對同路線同方向
- *   2. 海拔過濾：高架照相設有 minAltitude，GPS 海拔低於門檻就跳過
- *      （解決國1平面 vs 國1高架重疊路段的誤報）
- *   3. 距離過濾：只取半徑內最近的一個
+ * 優先使用 API 資料（全台所有道路），fallback 到內建國道資料
  *
  * @param {number} lat - 目前緯度
  * @param {number} lon - 目前經度
  * @param {object} options
- * @param {string}  options.road - 國道編號 ('1','1H','3')
- * @param {string}  options.direction - 方向 ('北向','南向')
- * @param {number}  options.altitude - GPS 海拔 (公尺)，null 表示無資料
+ * @param {string}  options.road - 國道編號 ('1','1H','3','5' 等)
+ * @param {string}  options.direction - 方向 ('北向','南向','東向','西向')
+ * @param {number}  options.altitude - GPS 海拔 (公尺)
  * @param {number}  options.radiusMeters - 搜尋半徑，預設 1500
  * @returns {object|null}
  */
 export function findNearbyCamera(lat, lon, { road, direction, altitude, radiusMeters = 1500 } = {}) {
-  const roadFilter = road ? ROAD_MAP[road] : null;
   let nearest = null;
   let minDist = Infinity;
 
-  for (const cam of SPEED_CAMERAS) {
-    // 1) 路線過濾
+  // 1) 搜尋 API 資料（全台所有道路）
+  if (apiCameras && apiCameras.length > 0) {
+    for (const cam of apiCameras) {
+      const dist = getDistanceMeters(lat, lon, cam.lat, cam.lon);
+      if (dist < radiusMeters && dist < minDist) {
+        minDist = dist;
+        nearest = {
+          lat: cam.lat,
+          lon: cam.lon,
+          speedLimit: cam.speedLimit,
+          direction: cam.direction,
+          name: cam.name || cam.address || '',
+          distance: Math.round(dist),
+        };
+      }
+    }
+  }
+
+  // 2) 同時搜尋內建國道資料（有路線/海拔過濾，更精確）
+  const roadFilter = road ? ROAD_MAP[road] : null;
+  for (const cam of BUILTIN_CAMERAS) {
+    // 路線過濾
     if (roadFilter && cam.road !== roadFilter) continue;
     if (direction && cam.direction !== direction) continue;
 
-    // 2) 海拔過濾：高架照相需要海拔夠高才顯示
+    // 海拔過濾：高架照相需要海拔夠高才顯示
     if (cam.elevated && cam.minAltitude != null && altitude != null) {
-      if (altitude < cam.minAltitude) continue; // 你在平面，跳過高架照相
+      if (altitude < cam.minAltitude) continue;
     }
-    // 反向：平面國道照相，如果你在高架上（海拔高），也跳過
+    // 反向：平面國道照相，如果你在高架上，跳過
     if (!cam.elevated && road === '1' && altitude != null && altitude >= 20) {
-      // 你在高架上，跳過平面國1的照相（僅限重疊路段 km 15~35）
       if (cam.road === '國1' && cam.km >= 15 && cam.km <= 35) continue;
     }
 
-    // 3) 距離過濾
     const dist = getDistanceMeters(lat, lon, cam.lat, cam.lon);
     if (dist < radiusMeters && dist < minDist) {
       minDist = dist;
       nearest = { ...cam, distance: Math.round(dist) };
     }
   }
+
   return nearest;
 }

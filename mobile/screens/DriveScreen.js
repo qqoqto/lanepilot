@@ -5,7 +5,7 @@ import {
 import * as Location from 'expo-location';
 import { API_BASE } from '../constants';
 import { useSettings } from '../SettingsContext';
-import { findNearbyCamera } from '../data/speedCameras';
+import { findNearbyCamera, initSpeedCameras } from '../data/speedCameras';
 import {
   announceCamera, announceLaneAdvice, announceBottleneck,
   announcePrediction, announceHighwayEntry, announceHighwayExit,
@@ -133,6 +133,9 @@ export default function DriveScreen() {
       const altM = (gpsAlt != null && gpsAlt >= 0) ? Math.round(gpsAlt) : null;
       setUserSpeed(speedKmh);
       setUserAltitude(altM);
+
+      // 首次取得座標時，預載全台測速照相資料
+      initSpeedCameras(latitude, longitude);
 
       setApiError(null); setGpsError(null);
       const nearbyResp = await fetchRetry(`${API_BASE}/api/v1/nearby?lat=${latitude}&lon=${longitude}`);
