@@ -258,14 +258,9 @@ export default function RealtimeScreen() {
             setCurrentLane(estimatedLane);
           }
 
-          // === 語音教練 ===
+          // === 語音教練（只在國道上才播報） ===
           const mainLanes_ = (laneJson.lanes || []).filter(l => !l.is_shoulder);
           updateSpeedHistory(mainLanes_);
-          // 預測式：偵測車道減速趨勢
-          if (!announcePrediction(mainLanes_, estimatedLane)) {
-            // 沒有預測播報時，才播車道建議
-            announceLaneAdvice(laneJson.advice, estimatedLane, sensitivity);
-          }
         }
       }
 
@@ -279,9 +274,15 @@ export default function RealtimeScreen() {
       }
       wasOnHighwayRef.current = onHighway;
 
-      // 語音：壅塞預警
-      const bns = nearbyJson.bottlenecks || [];
-      if (bns.length > 0) announceBottleneck(bns);
+      // 語音：車道建議 + 壅塞預警（只在國道上才播）
+      if (onHighway && laneData) {
+        const mainLanes_ = (laneData.lanes || []).filter(l => !l.is_shoulder);
+        if (!announcePrediction(mainLanes_, currentLane)) {
+          announceLaneAdvice(laneData.advice, currentLane, sensitivity);
+        }
+        const bns = nearbyJson.bottlenecks || [];
+        if (bns.length > 0) announceBottleneck(bns);
+      }
 
       setCountdown(30);
     } catch (e) {
