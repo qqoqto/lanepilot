@@ -1,6 +1,7 @@
 /**
  * 語音車道教練
  * 根據即時路況主動語音播報，駕駛不用看螢幕
+ * 所有語音排隊播放，不會疊加；測速照相優先插隊
  */
 import * as Speech from 'expo-speech';
 
@@ -10,6 +11,10 @@ let lastSpokenTime = 0;
 const MIN_INTERVAL = 15000; // 同一句至少間隔 15 秒
 let enabled = true;
 
+// 播報佇列
+const queue = [];        // [{ text, priority }]  priority 越小越優先
+let isSpeaking = false;
+
 /**
  * 啟用/停用語音
  */
@@ -17,25 +22,53 @@ export function setVoiceEnabled(val) { enabled = val; }
 export function isVoiceEnabled() { return enabled; }
 
 /**
- * 播報語音（自動防重複）
+ * 處理佇列：播完一句再播下一句
  */
-function speak(text, { force = false } = {}) {
-  if (!enabled) return;
-  const now = Date.now();
-  if (!force && text === lastSpoken && now - lastSpokenTime < MIN_INTERVAL) return;
-  // 先停止上一句，避免疊加
-  Speech.stop();
-  Speech.speak(text, {
+function processQueue() {
+  if (!enabled || isSpeaking || queue.length === 0) return;
+  // 按優先度排序（小的先播）
+  queue.sort((a, b) => a.priority - b.priority);
+  const next = queue.shift();
+  isSpeaking = true;
+  Speech.speak(next.text, {
     language: 'zh-TW',
     rate: 1.05,
     pitch: 1.0,
+    onDone: () => { isSpeaking = false; processQueue(); },
+    onError: () => { isSpeaking = false; processQueue(); },
   });
-  lastSpoken = text;
-  lastSpokenTime = now;
+  lastSpoken = next.text;
+  lastSpokenTime = Date.now();
 }
 
 /**
- * 測速照相提醒
+ * 排隊播報語音（自動防重複）
+ * priority: 0=最高（測速照相）, 1=高（壅塞）, 2=一般（車道建議）
+ */
+function speak(text, { force = false, priority = 2 } = {}) {
+  if (!enabled) return;
+  const now = Date.now();
+  if (!force && text === lastSpoken && now - lastSpokenTime < MIN_INTERVAL) return;
+
+  // 高優先度（測速照相）：清空佇列中低優先的，直接插隊
+  if (priority === 0) {
+    // 移除佇列中優先度比較低的
+    for (let i = queue.length - 1; i >= 0; i--) {
+      if (queue[i].priority > 0) queue.splice(i, 1);
+    }
+    // 如果正在播低優先的，打斷它
+    if (isSpeaking) {
+      Speech.stop();
+      isSpeaking = false;
+    }
+  }
+
+  queue.push({ text, priority });
+  processQueue();
+}
+
+/**
+ * 測速照相提醒（最高優先）
  */
 export function announceCamera(camera, userSpeed) {
   if (!camera) return;
@@ -44,9 +77,9 @@ export function announceCamera(camera, userSpeed) {
   if (dist > 1200) return; // 太遠不播
 
   if (userSpeed != null && userSpeed > limit) {
-    speak(`注意，前方${dist}公尺測速照相，限速${limit}，目前車速超過限速`);
+    speak(`注意，前方${dist}公尺測速照相，限速${limit}，目前車速超過限速`, { priority: 0 });
   } else if (dist <= 800) {
-    speak(`前方${dist}公尺測速照相，限速${limit}`);
+    speak(`前方${dist}公尺測速照相，限速${limit}`, { priority: 0 });
   }
 }
 
@@ -83,18 +116,18 @@ export function announceLaneAdvice(advice, currentLane, sensitivity) {
 export function announceBottleneck(bottlenecks) {
   if (!bottlenecks || bottlenecks.length === 0) return;
   const bn = bottlenecks[0]; // 最近的一個
-  speak(`注意，前方壅塞，${bn.worst_lane}降到${Math.round(bn.worst_speed)}公里`);
+  speak(`注意，前方壅塞，${bn.worst_lane}降到${Math.round(bn.worst_speed)}公里`, { priority: 1 });
 }
 
 /**
  * 進入/離開國道
  */
 export function announceHighwayEntry(roadName, direction) {
-  speak(`已進入${roadName}${direction}`);
+  speak(`已進入${roadName}${direction}`, { priority: 1 });
 }
 
 export function announceHighwayExit() {
-  speak(`已離開國道`);
+  speak(`已離開國道`, { priority: 1 });
 }
 
 // =====================================================
