@@ -2,27 +2,8 @@
  * 語音車道教練
  * 根據即時路況主動語音播報，駕駛不用看螢幕
  * 所有語音排隊播放，不會疊加；測速照相優先插隊
- * 播報時音樂自動降低音量（duck），播完恢復
  */
 import * as Speech from 'expo-speech';
-import { Audio, InterruptionModeIOS, InterruptionModeAndroid } from 'expo-av';
-
-// 設定音訊模式：語音播報時降低音樂音量，不暫停
-let audioModeReady = false;
-async function ensureAudioMode() {
-  if (audioModeReady) return;
-  try {
-    await Audio.setAudioModeAsync({
-      playsInSilentModeIOS: true,
-      interruptionModeIOS: InterruptionModeIOS.DuckOthers,
-      interruptionModeAndroid: InterruptionModeAndroid.DuckOthers,
-      shouldDuckAndroid: true,
-    });
-    audioModeReady = true;
-  } catch (e) {
-    // 靜默失敗，不影響主功能
-  }
-}
 
 // 防止重複播報：記錄上次播報內容和時間
 let lastSpoken = '';
@@ -43,9 +24,8 @@ export function isVoiceEnabled() { return enabled; }
 /**
  * 處理佇列：播完一句再播下一句
  */
-async function processQueue() {
+function processQueue() {
   if (!enabled || isSpeaking || queue.length === 0) return;
-  await ensureAudioMode();
   // 按優先度排序（小的先播）
   queue.sort((a, b) => a.priority - b.priority);
   const next = queue.shift();
