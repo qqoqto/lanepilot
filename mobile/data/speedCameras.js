@@ -157,21 +157,35 @@ export function findNearbyCamera(lat, lon, { road, direction, altitude, radiusMe
   let nearest = null;
   let minDist = Infinity;
 
+  // 判斷是否在高架上（海拔 > 15 公尺且走高架路線）
+  const isElevated = (road === '1H') || (altitude != null && altitude >= 15);
+
   // 1) 搜尋 API 資料（全台所有道路）
   if (apiCameras && apiCameras.length > 0) {
     for (const cam of apiCameras) {
       const dist = getDistanceMeters(lat, lon, cam.lat, cam.lon);
-      if (dist < radiusMeters && dist < minDist) {
-        minDist = dist;
-        nearest = {
-          lat: cam.lat,
-          lon: cam.lon,
-          speedLimit: cam.speedLimit,
-          direction: cam.direction,
-          name: cam.name || cam.address || '',
-          distance: Math.round(dist),
-        };
-      }
+      if (dist >= radiusMeters || dist >= minDist) continue;
+
+      // 高架/平面過濾：在高架上時，跳過平面道路的照相（非國道、非高架的照相）
+      const camRoad = cam.road || '';
+      const isHighwayCamera = camRoad.startsWith('國');
+      const isCamElevated = camRoad.includes('高架');
+      if (isElevated && !isCamElevated && !isHighwayCamera) continue;
+      // 在高架上，跳過同路線但標註為平面的國道照相
+      if (isElevated && isHighwayCamera && !isCamElevated && roadFilter && camRoad === roadFilter) continue;
+
+      // 方向過濾（如果照相有方向資訊）
+      if (direction && cam.direction && cam.direction !== direction) continue;
+
+      minDist = dist;
+      nearest = {
+        lat: cam.lat,
+        lon: cam.lon,
+        speedLimit: cam.speedLimit,
+        direction: cam.direction,
+        name: cam.name || cam.address || '',
+        distance: Math.round(dist),
+      };
     }
   }
 
@@ -186,10 +200,8 @@ export function findNearbyCamera(lat, lon, { road, direction, altitude, radiusMe
     if (cam.elevated && cam.minAltitude != null && altitude != null) {
       if (altitude < cam.minAltitude) continue;
     }
-    // 反向：平面國道照相，如果你在高架上，跳過
-    if (!cam.elevated && road === '1' && altitude != null && altitude >= 20) {
-      if (cam.road === '國1' && cam.km >= 15 && cam.km <= 35) continue;
-    }
+    // 反向：在高架上時，跳過平面國道照相
+    if (!cam.elevated && isElevated) continue;
 
     const dist = getDistanceMeters(lat, lon, cam.lat, cam.lon);
     if (dist < radiusMeters && dist < minDist) {
