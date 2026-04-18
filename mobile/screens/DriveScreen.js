@@ -1,21 +1,16 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import {
-  StyleSheet, Text, View, TouchableOpacity, Animated, Dimensions, Linking,
+  StyleSheet, Text, View, TouchableOpacity, Animated, Dimensions, Linking, ScrollView,
 } from 'react-native';
 import * as Location from 'expo-location';
 import { API_BASE } from '../constants';
 import { useSettings } from '../SettingsContext';
 import { findNearbyCamera, initSpeedCameras } from '../data/speedCameras';
-import {
-  announceCamera, announceLaneAdvice, announceBottleneck,
-  announcePrediction, announceHighwayEntry, announceHighwayExit,
-  updateSpeedHistory, setVoiceEnabled,
-} from '../utils/voiceCoach';
 
 const { width: SW } = Dimensions.get('window');
 
 // =====================================================
-// 交流道里程對照表 (簡化版，用於顯示位置)
+// 交流道里程對照表
 // =====================================================
 const INTERCHANGES = {
   '1': [
@@ -93,6 +88,24 @@ async function fetchRetry(url, { retries = 3, delay = 3000 } = {}) {
   }
 }
 
+// 路段速度 → 色帶色
+function segColor(speed) {
+  if (!speed || speed <= 0) return '#3A3A3C';
+  if (speed >= 80) return '#1D9E75'; // 綠 順暢
+  if (speed >= 60) return '#D4A017'; // 黃 車多
+  if (speed >= 40) return '#D97219'; // 橘 緩慢
+  return '#D94A4A';                  // 紅 壅塞
+}
+
+// 車道色塊色（和 RealtimeScreen 對應）
+function laneColor(speed) {
+  if (!speed || speed <= 1) return { bg: '#3A1818', text: '#FFB4B4' };
+  if (speed >= 80) return { bg: '#1A3A22', text: '#A5E29A' };
+  if (speed >= 60) return { bg: '#3A2E10', text: '#F4C77A' };
+  if (speed >= 40) return { bg: '#3A2410', text: '#F49E68' };
+  return { bg: '#3A1818', text: '#FF8080' };
+}
+
 // =====================================================
 // 主畫面
 // =====================================================
@@ -111,15 +124,8 @@ export default function DriveScreen() {
   const [currentLane, setCurrentLane] = useState(null);
   const [laneManualOverride, setLaneManualOverride] = useState(false);
   const [countdown, setCountdown] = useState(30);
-  const [voiceOn, setVoiceOn] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
-  const wasOnHighwayRef = useRef(false);
-
-  // --- 動畫 ---
-  const cardAnim = useRef(new Animated.Value(0)).current;
-  const showCard = (show) => {
-    Animated.spring(cardAnim, { toValue: show ? 1 : 0, useNativeDriver: true, tension: 80, friction: 12 }).start();
-  };
+  const [now, setNow] = useState(new Date());
 
   // --- 資料抓取 ---
   const fetchAll = useCallback(async () => {
@@ -134,7 +140,6 @@ export default function DriveScreen() {
       setUserSpeed(speedKmh);
       setUserAltitude(altM);
 
-      // 首次取得座標時，預載全台測速照相資料
       initSpeedCameras(latitude, longitude);
 
       setApiError(null); setGpsError(null);
@@ -149,14 +154,12 @@ export default function DriveScreen() {
       const { road, direction, mileage, distance_km } = nearbyJson.nearest || {};
       const dir_ = direction === 'N' ? '北向' : direction === 'S' ? '南向' : null;
 
-      // 測速照相
       if (road && distance_km != null && distance_km <= 1) {
         setNearbyCamera(findNearbyCamera(latitude, longitude, { road, direction: dir_, altitude: altM }));
       } else {
-        setNearbyCamera(null);
+        setNearbyCamera(findNearbyCamera(latitude, longitude));
       }
 
-      // 車道資料
       if (road && direction && mileage) {
         const sp = speedKmh != null ? `&speed=${speedKmh}` : '';
         const laneResp = await fetchRetry(
@@ -165,29 +168,11 @@ export default function DriveScreen() {
         if (laneResp.ok) {
           const laneJson = await laneResp.json();
           setLaneData(laneJson);
-          const est = (!laneManualOverride && laneJson.estimated_lane?.confidence !== 'low')
-            ? (laneJson.estimated_lane?.lane_name || null) : currentLane;
-          if (!laneManualOverride && laneJson.estimated_lane?.confidence !== 'low') setCurrentLane(est);
-
-          // 語音教練
-          const mains = (laneJson.lanes || []).filter(l => !l.is_shoulder);
-          updateSpeedHistory(mains);
-          if (!announcePrediction(mains, est)) {
-            announceLaneAdvice(laneJson.advice, est, sensitivity);
+          if (!laneManualOverride && laneJson.estimated_lane?.confidence !== 'low') {
+            setCurrentLane(laneJson.estimated_lane?.lane_name || null);
           }
         }
       }
-
-      // 語音：進出國道
-      const onHw = road && distance_km != null && distance_km <= 1;
-      const roadFull = nearbyJson.road || '';
-      if (onHw && !wasOnHighwayRef.current) announceHighwayEntry(roadFull, dir_);
-      else if (!onHw && wasOnHighwayRef.current) announceHighwayExit();
-      wasOnHighwayRef.current = onHw;
-
-      // 語音：壅塞
-      const bns = nearbyJson.bottlenecks || [];
-      if (bns.length > 0) announceBottleneck(bns);
 
       setCountdown(30);
     } catch (e) {
@@ -199,6 +184,7 @@ export default function DriveScreen() {
 
   useEffect(() => { fetchAll(); const i = setInterval(fetchAll, 30000); return () => clearInterval(i); }, [fetchAll]);
   useEffect(() => { const t = setInterval(() => setCountdown(p => p > 0 ? p - 1 : 0), 1000); return () => clearInterval(t); }, []);
+  useEffect(() => { const t = setInterval(() => setNow(new Date()), 15000); return () => clearInterval(t); }, []);
 
   // 高頻 GPS
   useEffect(() => {
@@ -218,9 +204,6 @@ export default function DriveScreen() {
     return () => { if (sub) sub.remove(); };
   }, []);
 
-  // 語音：測速照相
-  useEffect(() => { if (nearbyCamera) announceCamera(nearbyCamera, userSpeed); }, [nearbyCamera?.distance]);
-
   // --- 解析資料 ---
   const road = gpsData?.nearest?.road;
   const distKm = gpsData?.nearest?.distance_km;
@@ -230,38 +213,10 @@ export default function DriveScreen() {
   const isOnHighway = gpsData && distKm != null && distKm <= 1;
   const ic = road && yourKm ? findNearestIC(road, yourKm) : null;
 
-  const advice = laneData?.advice;
-  const diff = advice?.speed_diff || 0;
-  const isHold = diff < sensitivity;
-  const bottlenecks = gpsData?.bottlenecks || [];
+  const cameraActive = !!(nearbyCamera && nearbyCamera.distance <= 1200);
+  const isOverSpeed = cameraActive && userSpeed != null && userSpeed > nearbyCamera.speedLimit;
 
-  // --- 卡片邏輯：決定要顯示什麼卡片 ---
-  // 優先順序：測速 > 壅塞 > 車道建議
-  let cardType = null; // 'camera' | 'bottleneck' | 'advice' | 'prediction'
-  let cardData = {};
-
-  if (nearbyCamera && nearbyCamera.distance <= 1200) {
-    cardType = 'camera';
-    cardData = nearbyCamera;
-  } else if (isOnHighway && bottlenecks.length > 0) {
-    cardType = 'bottleneck';
-    cardData = bottlenecks[0];
-  } else if (isOnHighway && advice && !isHold) {
-    cardType = 'advice';
-    cardData = { advice, currentLane, diff };
-  }
-
-  // 控制卡片動畫
-  useEffect(() => { showCard(!!cardType); }, [cardType]);
-
-  // --- 速度顏色 (漸層感：低速藍 → 中速青 → 高速綠 → 超速紅) ---
-  const speedNum = userSpeed != null ? userSpeed : 0;
-  const isOverSpeed = nearbyCamera && userSpeed != null && userSpeed > nearbyCamera.speedLimit;
-  const speedColor = isOverSpeed ? '#FF453A'
-    : speedNum > 100 ? '#30D158'
-    : speedNum > 70 ? '#64D2FF'
-    : speedNum > 40 ? '#5E5CE6'
-    : '#AEAEB2';
+  const timeStr = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
 
   // --- Render ---
   return (
@@ -271,9 +226,6 @@ export default function DriveScreen() {
       <View style={s.topRow}>
         <View style={s.topLeft} />
         <View style={s.topRight}>
-          <TouchableOpacity onPress={() => { const v = !voiceOn; setVoiceOn(v); setVoiceEnabled(v); }} style={s.topBtn}>
-            <Text style={s.topBtnText}>{voiceOn ? '🔊' : '🔇'}</Text>
-          </TouchableOpacity>
           <TouchableOpacity onPress={() => setShowSettings(true)} style={s.topBtn}>
             <Text style={[s.topBtnText, { color: '#636366' }]}>⚙︎</Text>
           </TouchableOpacity>
@@ -298,104 +250,32 @@ export default function DriveScreen() {
       {/* ===== 主要內容 ===== */}
       {gpsData && !loading && (
         <View style={s.main}>
-
-          {/* 時速 — 永遠的主角 */}
-          <View style={s.speedSection}>
-            <Text style={[s.speedNum, { color: speedColor }]}>
-              {userSpeed != null ? userSpeed : '--'}
-            </Text>
-            <Text style={s.speedUnit}>km/h</Text>
-
-            {/* 國道順暢時的小提示 */}
-            {isOnHighway && isHold && !cardType && (
-              <Text style={s.holdText}>✓ 維持車道</Text>
-            )}
-          </View>
-
-          {/* 限速路牌 (測速照相接近時) */}
-          {nearbyCamera && nearbyCamera.distance <= 1200 && (
-            <View style={s.speedSign}>
-              <View style={[s.speedSignCircle, isOverSpeed && s.speedSignOver]}>
-                <Text style={[s.speedSignNum, isOverSpeed && { color: '#FF3B30' }]}>
-                  {nearbyCamera.speedLimit}
-                </Text>
-              </View>
-              <Text style={s.speedSignDist}>{nearbyCamera.distance}m</Text>
-            </View>
+          {cameraActive ? (
+            <CameraView
+              camera={nearbyCamera}
+              userSpeed={userSpeed}
+              isOverSpeed={isOverSpeed}
+              fallbackRoadName={roadName}
+            />
+          ) : !isOnHighway ? (
+            <SpeedometerView
+              speed={userSpeed}
+              timeStr={timeStr}
+            />
+          ) : (
+            <HighwayView
+              gpsData={gpsData}
+              laneData={laneData}
+              userSpeed={userSpeed}
+              yourKm={yourKm}
+              roadName={roadName}
+              dirLabel={dirLabel}
+              ic={ic}
+              currentLane={currentLane}
+              setCurrentLane={(l) => { setCurrentLane(l); setLaneManualOverride(true); }}
+              resetLane={() => { setCurrentLane(null); setLaneManualOverride(false); }}
+            />
           )}
-
-          {/* ===== 浮出卡片 ===== */}
-          <Animated.View style={[s.card, {
-            opacity: cardAnim,
-            transform: [{ translateY: cardAnim.interpolate({ inputRange: [0, 1], outputRange: [40, 0] }) }],
-          }]}>
-            {/* 車道建議卡片 */}
-            {cardType === 'advice' && (
-              <View style={s.cardInner}>
-                <View style={[s.cardAccent, { backgroundColor: '#5E5CE6' }]} />
-                <View style={s.cardContent}>
-                  <Text style={[s.cardAction, { color: '#BDB6FF' }]}>
-                    → {cardData.currentLane ? `${cardData.currentLane} → ${cardData.advice.best_lane}` : `切 ${cardData.advice.best_lane}`}
-                  </Text>
-                  <Text style={s.cardReason}>快 {Math.round(cardData.diff)} km/h</Text>
-                  {!voiceOn && <Text style={s.cardUpgrade}>🔇 升級 Pro 開啟語音提醒</Text>}
-                </View>
-              </View>
-            )}
-
-            {/* 預測建議卡片 */}
-            {cardType === 'prediction' && (
-              <View style={s.cardInner}>
-                <View style={[s.cardAccent, { backgroundColor: '#64D2FF' }]} />
-                <View style={s.cardContent}>
-                  <View style={s.cardHeader}>
-                    <Text style={[s.cardAction, { color: '#A0E8FF' }]}>→ 提前切{cardData.bestLane}</Text>
-                    <View style={s.predBadge}><Text style={s.predBadgeText}>預測</Text></View>
-                  </View>
-                  <Text style={s.cardReason}>{cardData.reason}</Text>
-                </View>
-              </View>
-            )}
-
-            {/* 壅塞卡片 */}
-            {cardType === 'bottleneck' && (
-              <View style={s.cardInner}>
-                <View style={[s.cardAccent, { backgroundColor: '#FF9F0A' }]} />
-                <View style={s.cardContent}>
-                  <Text style={s.cardActionWarn}>⚠ 前方壅塞</Text>
-                  <Text style={s.cardReason}>
-                    {cardData.worst_lane} 降至 {Math.round(cardData.worst_speed)} km/h
-                  </Text>
-                  <Text style={s.cardSub}>{cardData.start} → {cardData.end}</Text>
-                </View>
-              </View>
-            )}
-
-            {/* 測速照相卡片 */}
-            {cardType === 'camera' && (
-              <View style={s.cardInner}>
-                <View style={[s.cardAccent, { backgroundColor: isOverSpeed ? '#FF453A' : '#FF9F0A' }]} />
-                <View style={s.cardContent}>
-                  <Text style={[s.cardActionWarn, isOverSpeed && { color: '#FF453A' }]}>
-                    {isOverSpeed ? '⚠ 超速！' : '測速照相'}
-                  </Text>
-                  <Text style={s.cardReason}>
-                    限速 {cardData.speedLimit} km/h · {cardData.name}
-                  </Text>
-                </View>
-              </View>
-            )}
-          </Animated.View>
-
-          {/* 底部資訊列 */}
-          <View style={s.bottomRow}>
-            <Text style={s.bottomText}>
-              {isOnHighway
-                ? `${roadName} ${dirLabel} · ${ic ? `近${ic.name}` : `${yourKm}K`}`
-                : '目前不在國道上'
-              }
-            </Text>
-          </View>
         </View>
       )}
 
@@ -410,18 +290,6 @@ export default function DriveScreen() {
               </TouchableOpacity>
             </View>
 
-            {/* 語音提醒 */}
-            <View style={s.settingRow}>
-              <Text style={s.settingLabel}>語音提醒</Text>
-              <TouchableOpacity
-                style={[s.settingToggle, voiceOn && s.settingToggleOn]}
-                onPress={() => { const v = !voiceOn; setVoiceOn(v); setVoiceEnabled(v); }}
-              >
-                <Text style={s.settingToggleText}>{voiceOn ? 'ON' : 'OFF'}</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* 靈敏度 */}
             <View style={s.settingRow}>
               <Text style={s.settingLabel}>車道靈敏度</Text>
               <View style={s.segCtrl}>
@@ -438,7 +306,6 @@ export default function DriveScreen() {
             </View>
             <Text style={s.settingHint}>速差 ≥ {sensitivity} km/h 才建議切換</Text>
 
-            {/* 關於 */}
             <View style={s.settingDivider} />
             <TouchableOpacity onPress={() => Linking.openURL('https://qqoqto.github.io/lanepilot/privacy-policy.html')}>
               <Text style={s.settingLink}>隱私權政策</Text>
@@ -452,85 +319,415 @@ export default function DriveScreen() {
 }
 
 // =====================================================
-// Apple Maps 風格樣式
+// 模式 B: 尚未進入國道 — 圓環速度表 (1.jpg)
+// =====================================================
+function SpeedometerView({ speed, timeStr }) {
+  const size = 290;
+  const borderW = 14;
+  return (
+    <View style={s.sbWrap}>
+      <Text style={s.sbClock}>{timeStr}</Text>
+
+      <View style={{
+        width: size, height: size, borderRadius: size / 2,
+        borderWidth: borderW,
+        borderTopColor: '#0A84FF',
+        borderRightColor: '#FF3B30',
+        borderBottomColor: '#FF3B30',
+        borderLeftColor: '#FFFFFF',
+        transform: [{ rotate: '-45deg' }],
+        alignItems: 'center', justifyContent: 'center',
+      }}>
+        <View style={{ transform: [{ rotate: '45deg' }], alignItems: 'center' }}>
+          <Text style={s.sbSpeed}>{speed != null ? speed : '--'}</Text>
+          <Text style={s.sbUnit}>km/h</Text>
+        </View>
+      </View>
+
+      <View style={s.sbGps}>
+        <View style={s.sbGpsBars}>
+          {[1, 2, 3, 4, 5, 6].map(i => (
+            <View key={i} style={[s.sbGpsBar, { height: 4 + i * 4 }]} />
+          ))}
+        </View>
+        <Text style={s.sbGpsText}>G P S</Text>
+      </View>
+    </View>
+  );
+}
+
+// =====================================================
+// 模式 A: 測速照相接近中 (6.jpg)
+// =====================================================
+function CameraView({ camera, userSpeed, isOverSpeed, fallbackRoadName }) {
+  const roadText = (camera.road || fallbackRoadName || '一般道路')
+    .replace('國1高架', '國道1號高架').replace(/^國(\d+)/, '國道$1號');
+  const maxDist = 1200;
+  const fillRatio = Math.max(0.08, Math.min(1, (maxDist - camera.distance) / maxDist));
+
+  const spColor = isOverSpeed ? '#FF3B30'
+    : (userSpeed != null && camera.speedLimit != null && userSpeed >= camera.speedLimit - 5) ? '#FFB340'
+    : '#6EE07A';
+
+  return (
+    <View style={s.cvWrap}>
+      <View style={s.cvTopRow}>
+        <View style={{ flex: 1 }}>
+          <View style={s.cvCamIconRow}>
+            <View style={s.cvCamIcon}>
+              <View style={s.cvCamLens} />
+              <View style={s.cvCamLens2} />
+              <View style={s.cvCamStripe} />
+            </View>
+            <View style={s.cvFixedBadge}>
+              <Text style={s.cvFixedText}>固</Text>
+            </View>
+          </View>
+          <View style={s.cvRoadRow}>
+            <View style={s.cvFlowerBadge}>
+              <Text style={s.cvFlowerText}>1</Text>
+            </View>
+            <View style={s.cvRoadLabel}>
+              <Text style={s.cvRoadText}>{roadText}</Text>
+            </View>
+          </View>
+        </View>
+
+        <View style={s.cvLimitCircle}>
+          <Text style={s.cvLimitNum}>{camera.speedLimit}</Text>
+        </View>
+      </View>
+
+      <View style={s.cvDistBar}>
+        <View style={{ flex: 1 - fillRatio, backgroundColor: 'transparent' }} />
+        <View style={[s.cvDistFill, { flex: fillRatio }]}>
+          <Text style={s.cvDistText}>{camera.distance} m</Text>
+        </View>
+      </View>
+
+      {!!camera.name && (
+        <Text style={s.cvCamName} numberOfLines={1}>{camera.name}</Text>
+      )}
+
+      <View style={s.cvSpeedBox}>
+        <Text style={[s.cvSpeedNum, { color: spColor }]}>
+          {userSpeed != null ? userSpeed : '--'}
+        </Text>
+        <Text style={[s.cvSpeedUnit, { color: spColor }]}>km/h</Text>
+      </View>
+    </View>
+  );
+}
+
+// =====================================================
+// 模式 C: 國道主畫面 — 上面路段色帶 + 下面車道色塊 (2-5.jpg)
+// =====================================================
+function HighwayView({
+  gpsData, laneData, userSpeed, yourKm, roadName, dirLabel, ic,
+  currentLane, setCurrentLane, resetLane,
+}) {
+  const dirN = dirLabel === '北向';
+  const stations = (gpsData?.stations || []).filter(s => (s.lanes || []).some(l => !l.is_shoulder && l.speed > 0));
+
+  // 排序：N 向由北到南 (km 小到大)，S 向由南到北 (km 大到小)；讓畫面由上往下是「前進方向」
+  const sorted = [...stations].sort((a, b) => dirN ? a.mileage - b.mileage : b.mileage - a.mileage);
+
+  // 挑使用者前方 + 自身所在的 4 個站
+  const ahead = sorted.filter(s => dirN ? s.mileage >= yourKm - 1 : s.mileage <= yourKm + 1).slice(0, 4);
+
+  // 計算每站平均速度
+  const withAvg = ahead.map(s => {
+    const mains = (s.lanes || []).filter(l => !l.is_shoulder && l.speed > 0);
+    const avg = mains.length ? Math.round(mains.reduce((a, b) => a + b.speed, 0) / mains.length) : 0;
+    return { ...s, avgSpeed: avg };
+  });
+
+  // ETA 粗估：從目前位置到該站的距離 / 平均速度
+  function eta(st) {
+    const dist = Math.abs(st.mileage - yourKm);
+    const sp = st.avgSpeed || 0;
+    if (!sp) return { min: '--', km: dist.toFixed(1) };
+    return { min: Math.max(1, Math.round(dist / sp * 60)), km: dist.toFixed(1) };
+  }
+
+  // 目前所在車站 (最靠近 yourKm)
+  const selfStation = laneData ? { lanes: laneData.lanes || [], location: laneData.location } : null;
+  const mainLanes = (selfStation?.lanes || []).filter(l => !l.is_shoulder);
+  const advice = laneData?.advice;
+
+  // 速度顏色 (使用者)
+  const spNum = userSpeed != null ? userSpeed : 0;
+  const userSpColor = spNum > 100 ? '#30D158' : spNum > 70 ? '#64D2FF' : spNum > 40 ? '#5E5CE6' : '#AEAEB2';
+
+  return (
+    <ScrollView style={s.hvScroll} contentContainerStyle={s.hvContent} showsVerticalScrollIndicator={false}>
+      {/* ===== 上半：路段色帶 ===== */}
+      <View style={s.hvStrip}>
+        {withAvg.length === 0 ? (
+          <Text style={s.hvEmpty}>前方路段資料載入中...</Text>
+        ) : withAvg.map((st, i) => {
+          const next = withAvg[i + 1];
+          const e = eta(st);
+          const roadIcon = roadName?.includes('高架') ? '1高架' : roadName?.match(/國(\d+)/)?.[1] || '1';
+          return (
+            <Fragment key={st.vd_id || i}>
+              {/* 交流道列 */}
+              <View style={s.hvRow}>
+                <View style={s.hvBadge}>
+                  <Text style={s.hvBadgeText}>{Math.round(st.mileage)} {st.location || ''}</Text>
+                </View>
+                <View style={s.hvEtaCol}>
+                  <Text style={s.hvEtaText}>{e.min}分鐘 · {e.km}k</Text>
+                </View>
+              </View>
+              {/* 速度色帶（連接到下一站） */}
+              {next && (
+                <View style={s.hvBarRow}>
+                  <View style={[s.hvBar, { backgroundColor: segColor(st.avgSpeed) }]}>
+                    <Text style={s.hvBarNum}>{st.avgSpeed || '--'}</Text>
+                    <Text style={s.hvBarUnit}>km/h</Text>
+                  </View>
+                  <View style={s.hvBarSide} />
+                </View>
+              )}
+            </Fragment>
+          );
+        })}
+        {/* 使用者位置 marker */}
+        <View style={s.hvUserRow}>
+          <View style={s.hvUserIcon}>
+            <Text style={s.hvUserIconText}>{roadName?.match(/國(\d+)/)?.[1] || '1'}</Text>
+          </View>
+          <View style={s.hvUserKmTag}>
+            <Text style={s.hvUserKmText}>{yourKm} K</Text>
+          </View>
+        </View>
+      </View>
+
+      {/* ===== 下半：車道速度色塊 ===== */}
+      {mainLanes.length > 0 && (
+        <View style={s.hvLanes}>
+          <View style={s.hvLanesHeaderRow}>
+            <Text style={s.hvLanesHeader}>
+              {roadName} {dirLabel} · {ic ? `近${ic.name}` : ''}
+            </Text>
+            {advice && advice.speed_diff >= 10 && (
+              <Text style={s.hvAdviceHint}>
+                → {currentLane ? `${currentLane} → ${advice.best_lane}` : `建議 ${advice.best_lane}`} (快 {Math.round(advice.speed_diff)})
+              </Text>
+            )}
+          </View>
+          <View style={s.hvLaneRow}>
+            {mainLanes.map((lane, idx) => {
+              const c = laneColor(lane.speed);
+              const isBest = advice && lane.name === advice.best_lane;
+              const isCurrent = currentLane === lane.name;
+              const stuck = lane.speed <= 1;
+              return (
+                <TouchableOpacity
+                  key={idx}
+                  style={[s.hvLaneBlock, { backgroundColor: c.bg }, isCurrent && s.hvLaneBlockCurrent]}
+                  activeOpacity={0.7}
+                  onPress={() => setCurrentLane(lane.name)}
+                >
+                  {isBest && !isCurrent && <View style={s.hvLaneBestDot} />}
+                  {isCurrent && <Text style={s.hvLaneHere}>你在這</Text>}
+                  <Text style={[s.hvLaneName, { color: c.text }]}>{lane.name}</Text>
+                  <Text style={s.hvLaneSpeed}>{stuck ? '!' : Math.round(lane.speed)}</Text>
+                  <Text style={[s.hvLaneUnit, { color: c.text }]}>{stuck ? '靜止' : 'km/h'}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+          {currentLane && (
+            <TouchableOpacity onPress={resetLane} style={{ alignSelf: 'center', padding: 6 }}>
+              <Text style={s.hvLaneReset}>重設車道</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
+      {/* ===== 使用者目前速度 ===== */}
+      <View style={s.hvUserSpeed}>
+        <Text style={[s.hvUserSpeedNum, { color: userSpColor }]}>
+          {userSpeed != null ? userSpeed : '--'}
+        </Text>
+        <Text style={s.hvUserSpeedUnit}>km/h</Text>
+      </View>
+    </ScrollView>
+  );
+}
+
+// =====================================================
+// 樣式
 // =====================================================
 const s = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0A0A10' },
 
-  // 頂部
   topRow: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
     paddingHorizontal: 20, paddingVertical: 8,
   },
   topLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   topRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  gpsDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#3A3A3C' },
-  gpsDotOn: { backgroundColor: '#30D158' },
-  countdown: { color: '#3A3A3C', fontSize: 11 },
   topBtn: { padding: 8 },
   topBtnText: { fontSize: 18 },
 
-  // 載入/錯誤
   center: { flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 40 },
   loadingText: { color: '#8E8E93', fontSize: 17 },
   errorText: { color: '#8E8E93', fontSize: 16, textAlign: 'center', marginBottom: 20 },
   retryBtn: { backgroundColor: '#0A84FF20', borderRadius: 12, paddingHorizontal: 24, paddingVertical: 10 },
   retryText: { color: '#0A84FF', fontSize: 15, fontWeight: '600' },
 
-  // 主要區域
-  main: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  main: { flex: 1, width: '100%' },
 
-  // 時速
-  speedSection: { alignItems: 'center' },
-  speedNum: {
-    fontSize: 130, fontWeight: '300', lineHeight: 140,
-    fontVariant: ['tabular-nums'], letterSpacing: -3,
+  // ===== SpeedometerView =====
+  sbWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 10 },
+  sbClock: { color: '#64D2FF', fontSize: 54, fontWeight: '300', letterSpacing: 2, marginBottom: 24 },
+  sbSpeed: { color: '#FFFFFF', fontSize: 120, fontWeight: '300', lineHeight: 130, letterSpacing: -4 },
+  sbUnit: { color: '#8E8E93', fontSize: 20, fontWeight: '500', marginTop: -8 },
+  sbGps: { alignItems: 'center', marginTop: 40 },
+  sbGpsBars: { flexDirection: 'row', alignItems: 'flex-end', gap: 3 },
+  sbGpsBar: { width: 5, backgroundColor: '#64D2FF', borderRadius: 1 },
+  sbGpsText: { color: '#64D2FF', fontSize: 11, letterSpacing: 4, marginTop: 4 },
+
+  // ===== CameraView =====
+  cvWrap: { flex: 1, paddingHorizontal: 22, paddingTop: 10 },
+  cvTopRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
+  cvCamIconRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  cvCamIcon: {
+    width: 60, height: 78, position: 'relative',
+    backgroundColor: '#B8BFC7', borderRadius: 4,
+    borderWidth: 2, borderColor: '#000',
   },
-  speedUnit: { color: '#8E8E93', fontSize: 20, fontWeight: '500', marginTop: -2 },
-  holdText: { color: '#30D158', fontSize: 16, fontWeight: '600', marginTop: 20 },
-
-  // 限速路牌
-  speedSign: { alignItems: 'center', marginTop: 24 },
-  speedSignCircle: {
-    width: 60, height: 60, borderRadius: 30,
-    borderWidth: 3, borderColor: '#FF453A',
-    backgroundColor: '#1A1A24',
+  cvCamLens: {
+    width: 22, height: 22, borderRadius: 11,
+    backgroundColor: '#000', position: 'absolute', top: 8, left: 8,
+    borderWidth: 2, borderColor: '#4A5058',
+  },
+  cvCamLens2: {
+    width: 14, height: 14, borderRadius: 7,
+    backgroundColor: '#000', position: 'absolute', top: 36, left: 10,
+    borderWidth: 2, borderColor: '#4A5058',
+  },
+  cvCamStripe: {
+    position: 'absolute', bottom: 0, right: -10, width: 16, height: 54,
+    backgroundColor: '#FFDC42',
+  },
+  cvFixedBadge: {
+    width: 44, height: 44, borderRadius: 22,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2, borderColor: '#FF3B30',
+    alignItems: 'center', justifyContent: 'center',
+    marginLeft: 6,
+  },
+  cvFixedText: { color: '#FF3B30', fontWeight: '900', fontSize: 22 },
+  cvRoadRow: { flexDirection: 'row', alignItems: 'center', marginTop: 10, gap: 6 },
+  cvFlowerBadge: {
+    width: 32, height: 32, borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2, borderColor: '#1D9E75',
     alignItems: 'center', justifyContent: 'center',
   },
-  speedSignOver: { backgroundColor: '#2A0A10', borderColor: '#FF453A' },
-  speedSignNum: { color: '#FFFFFF', fontSize: 20, fontWeight: '700' },
-  speedSignDist: { color: '#8E8E93', fontSize: 12, marginTop: 4 },
+  cvFlowerText: { color: '#1D9E75', fontWeight: '900', fontSize: 14 },
+  cvRoadLabel: {
+    backgroundColor: 'transparent',
+    borderWidth: 2, borderColor: '#FFFFFF',
+    paddingHorizontal: 12, paddingVertical: 4, borderRadius: 8,
+  },
+  cvRoadText: { color: '#FFFFFF', fontWeight: '700', fontSize: 17 },
+  cvLimitCircle: {
+    width: 130, height: 130, borderRadius: 65,
+    borderWidth: 11, borderColor: '#FF3B30',
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  cvLimitNum: { color: '#000000', fontSize: 56, fontWeight: '900' },
 
-  // 浮出卡片
-  card: {
-    position: 'absolute', bottom: 60, left: 16, right: 16,
-    backgroundColor: '#1A1A24',
-    borderRadius: 20, paddingVertical: 20, paddingHorizontal: 20,
-    shadowColor: '#000', shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.6, shadowRadius: 20, elevation: 12,
-    borderWidth: 0.5, borderColor: '#2A2A3A',
+  cvDistBar: {
+    marginTop: 22, height: 52,
+    borderWidth: 2, borderColor: '#8E95A0', borderRadius: 26,
+    flexDirection: 'row', overflow: 'hidden',
+    backgroundColor: '#0A0A10',
   },
-  cardInner: { flexDirection: 'row', alignItems: 'stretch' },
-  cardAccent: { width: 4, borderRadius: 2, marginRight: 16 },
-  cardContent: { flex: 1 },
-  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  cardAction: { fontSize: 22, fontWeight: '600', letterSpacing: -0.3 },
-  cardActionWarn: { color: '#FFB340', fontSize: 22, fontWeight: '600', letterSpacing: -0.3 },
-  cardReason: { color: '#AEAEB2', fontSize: 15, marginTop: 6 },
-  cardSub: { color: '#636366', fontSize: 13, marginTop: 4 },
-  cardUpgrade: { color: '#636366', fontSize: 11, marginTop: 14 },
-  predBadge: {
-    backgroundColor: '#64D2FF20', borderRadius: 8,
-    paddingHorizontal: 10, paddingVertical: 4,
+  cvDistFill: {
+    backgroundColor: '#8AD97A',
+    alignItems: 'center', justifyContent: 'center',
   },
-  predBadgeText: { color: '#64D2FF', fontSize: 12, fontWeight: '600' },
+  cvDistText: { color: '#0A2510', fontSize: 24, fontWeight: '700' },
+  cvCamName: { color: '#8E8E93', fontSize: 12, marginTop: 10, textAlign: 'center' },
 
-  // 底部
-  bottomRow: {
-    position: 'absolute', bottom: 20, left: 0, right: 0,
-    alignItems: 'center',
+  cvSpeedBox: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  cvSpeedNum: { fontSize: 180, fontWeight: '800', lineHeight: 190, letterSpacing: -6 },
+  cvSpeedUnit: { fontSize: 22, fontWeight: '600', marginTop: -4 },
+
+  // ===== HighwayView =====
+  hvScroll: { flex: 1 },
+  hvContent: { paddingHorizontal: 14, paddingBottom: 30 },
+  hvStrip: {
+    backgroundColor: '#0F1930',
+    borderWidth: 1, borderColor: '#5E5CE6',
+    borderRadius: 20, padding: 14,
   },
-  bottomText: { color: '#5E5CE6', fontSize: 13, fontWeight: '500' },
+  hvEmpty: { color: '#8E8E93', textAlign: 'center', padding: 30, fontSize: 13 },
+  hvRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 2, minHeight: 36 },
+  hvBadge: {
+    backgroundColor: '#FFC857',
+    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8,
+  },
+  hvBadgeText: { color: '#0A0A10', fontWeight: '700', fontSize: 14 },
+  hvEtaCol: { flex: 1, alignItems: 'flex-end' },
+  hvEtaText: { color: '#D1D5DB', fontSize: 14 },
+  hvBarRow: { flexDirection: 'row', alignItems: 'stretch', marginVertical: 2 },
+  hvBar: {
+    width: 62, marginLeft: 8,
+    paddingVertical: 14, alignItems: 'center', justifyContent: 'center',
+    minHeight: 70,
+  },
+  hvBarNum: { color: '#FFFFFF', fontSize: 22, fontWeight: '700' },
+  hvBarUnit: { color: '#FFFFFF', fontSize: 11, opacity: 0.9, marginTop: -2 },
+  hvBarSide: { flex: 1 },
+  hvUserRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4, marginLeft: 6 },
+  hvUserIcon: {
+    width: 30, height: 30, borderRadius: 15,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 2, borderColor: '#1D9E75',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  hvUserIconText: { color: '#1D9E75', fontWeight: '900', fontSize: 13 },
+  hvUserKmTag: {
+    marginLeft: 6,
+    backgroundColor: '#1D9E75',
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
+  },
+  hvUserKmText: { color: '#FFFFFF', fontWeight: '700', fontSize: 14 },
+
+  // 下半：車道色塊
+  hvLanes: { marginTop: 18 },
+  hvLanesHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, paddingHorizontal: 4 },
+  hvLanesHeader: { color: '#8E8E93', fontSize: 13 },
+  hvAdviceHint: { color: '#BDB6FF', fontSize: 12, fontWeight: '600' },
+  hvLaneRow: { flexDirection: 'row', gap: 6 },
+  hvLaneBlock: {
+    flex: 1, borderRadius: 12, paddingVertical: 12,
+    alignItems: 'center', minHeight: 86,
+    borderWidth: 2, borderColor: 'transparent',
+  },
+  hvLaneBlockCurrent: { borderColor: '#64D2FF' },
+  hvLaneBestDot: {
+    position: 'absolute', top: 6, right: 6,
+    width: 8, height: 8, borderRadius: 4, backgroundColor: '#30D158',
+  },
+  hvLaneHere: { position: 'absolute', top: 4, color: '#64D2FF', fontSize: 10, fontWeight: '700' },
+  hvLaneName: { fontSize: 12, fontWeight: '600', marginTop: 12 },
+  hvLaneSpeed: { color: '#FFFFFF', fontSize: 26, fontWeight: '700', marginTop: 2 },
+  hvLaneUnit: { fontSize: 11 },
+  hvLaneReset: { color: '#64D2FF', fontSize: 13, marginTop: 6 },
+
+  // 底部：使用者速度
+  hvUserSpeed: { alignItems: 'center', marginTop: 20 },
+  hvUserSpeedNum: { fontSize: 110, fontWeight: '300', lineHeight: 120, letterSpacing: -3, fontVariant: ['tabular-nums'] },
+  hvUserSpeedUnit: { color: '#8E8E93', fontSize: 18, fontWeight: '500', marginTop: -6 },
 
   // 設定覆蓋層
   settingsOverlay: {
@@ -556,12 +753,6 @@ const s = StyleSheet.create({
     marginBottom: 16,
   },
   settingLabel: { color: '#FFFFFF', fontSize: 15 },
-  settingToggle: {
-    backgroundColor: '#3A3A3C', borderRadius: 8,
-    paddingHorizontal: 16, paddingVertical: 6,
-  },
-  settingToggleOn: { backgroundColor: '#30D158' },
-  settingToggleText: { color: '#FFFFFF', fontSize: 13, fontWeight: '600' },
 
   segCtrl: { flexDirection: 'row', backgroundColor: '#2C2C2E', borderRadius: 8, overflow: 'hidden' },
   segBtn: { paddingHorizontal: 16, paddingVertical: 8 },
