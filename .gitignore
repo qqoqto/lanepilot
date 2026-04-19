@@ -24,4 +24,5 @@ node_modules/
 
 # 測試用檔案
 test_vd.xml
-1.jpg
+/*.jpg
+/*.html

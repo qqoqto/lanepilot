@@ -144,23 +144,28 @@ const ROAD_MAP = { '1': '國1', '1H': '國1高架', '3': '國3', '5': '國5', '2
  *
  * 優先使用 API 資料（全台所有道路），fallback 到內建國道資料
  *
+ * 距離計算：在高速公路上有 yourKm 時，優先用「里程差」(更接近實際開車距離)；
+ * 否則退回 GPS 直線距離 (Haversine)。
+ *
  * @param {number} lat - 目前緯度
  * @param {number} lon - 目前經度
  * @param {object} options
  * @param {string}  options.road - 國道編號 ('1','1H','3','5' 等)
  * @param {string}  options.direction - 方向 ('北向','南向','東向','西向')
  * @param {number}  options.altitude - GPS 海拔 (公尺)
- * @param {number}  options.radiusMeters - 搜尋半徑，預設 1500
+ * @param {number}  options.yourKm - 使用者目前所在里程 (km)
+ * @param {number}  options.radiusMeters - 搜尋半徑，預設 800
  * @returns {object|null}
  */
-export function findNearbyCamera(lat, lon, { road, direction, altitude, radiusMeters = 1500 } = {}) {
+export function findNearbyCamera(lat, lon, { road, direction, altitude, yourKm, radiusMeters = 800 } = {}) {
   let nearest = null;
   let minDist = Infinity;
 
   // 判斷是否在高架上（海拔 > 15 公尺且走高架路線）
   const isElevated = (road === '1H') || (altitude != null && altitude >= 15);
+  const roadFilter = road ? ROAD_MAP[road] : null;
 
-  // 1) 搜尋 API 資料（全台所有道路）
+  // 1) 搜尋 API 資料（全台所有道路）— 沒有里程資訊，只能用 GPS 直線距離
   if (apiCameras && apiCameras.length > 0) {
     for (const cam of apiCameras) {
       const dist = getDistanceMeters(lat, lon, cam.lat, cam.lon);
@@ -181,6 +186,7 @@ export function findNearbyCamera(lat, lon, { road, direction, altitude, radiusMe
       nearest = {
         lat: cam.lat,
         lon: cam.lon,
+        road: cam.road,
         speedLimit: cam.speedLimit,
         direction: cam.direction,
         name: cam.name || cam.address || '',
@@ -189,8 +195,7 @@ export function findNearbyCamera(lat, lon, { road, direction, altitude, radiusMe
     }
   }
 
-  // 2) 同時搜尋內建國道資料（有路線/海拔過濾，更精確）
-  const roadFilter = road ? ROAD_MAP[road] : null;
+  // 2) 同時搜尋內建國道資料（有路線/海拔/里程過濾，更精確）
   for (const cam of BUILTIN_CAMERAS) {
     // 路線過濾
     if (roadFilter && cam.road !== roadFilter) continue;
@@ -203,7 +208,18 @@ export function findNearbyCamera(lat, lon, { road, direction, altitude, radiusMe
     // 反向：在高架上時，跳過平面國道照相
     if (!cam.elevated && isElevated) continue;
 
-    const dist = getDistanceMeters(lat, lon, cam.lat, cam.lon);
+    // 距離：有里程資訊時用里程差（前進方向才算），否則用 GPS 直線
+    let dist;
+    if (yourKm != null && cam.km != null && direction) {
+      // 國道里程：km 0 在北端、數值往南遞增
+      // 北向：camera.km 應 < yourKm 才在前方；南向：camera.km 應 > yourKm 才在前方
+      const ahead = direction === '北向' ? (cam.km <= yourKm) : (cam.km >= yourKm);
+      if (!ahead) continue;
+      dist = Math.abs(cam.km - yourKm) * 1000;
+    } else {
+      dist = getDistanceMeters(lat, lon, cam.lat, cam.lon);
+    }
+
     if (dist < radiusMeters && dist < minDist) {
       minDist = dist;
       nearest = { ...cam, distance: Math.round(dist) };
