@@ -161,8 +161,12 @@ export function findNearbyCamera(lat, lon, { road, direction, altitude, yourKm, 
   let nearest = null;
   let minDist = Infinity;
 
-  // 判斷是否在高架上（海拔 > 15 公尺且走高架路線）
-  const isElevated = (road === '1H') || (altitude != null && altitude >= 15);
+  // 判斷是否在高架上：
+  // - GPS 海拔有資料時以海拔為主（>=15 公尺視為高架，避免後端誤選高架 VD 時連帶誤判）
+  // - 海拔缺失時才退回 road 代碼判斷
+  const isElevated = (altitude != null)
+    ? (altitude >= 15)
+    : (road === '1H');
   const roadFilter = road ? ROAD_MAP[road] : null;
 
   // 1) 搜尋 API 資料（全台所有道路）— 沒有里程資訊，只能用 GPS 直線距離

@@ -231,7 +231,9 @@ export default function DriveScreen() {
   const yourKm = gpsData?.your_km;
   const dirLabel = gpsData?.direction;
   const roadName = gpsData?.road;
-  const isOnHighway = gpsData && distKm != null && distKm <= 1;
+  // 已在高速判定：距最近 VD 站 ≤ 3km，或後端已回車道資料
+  const hasLanes = !!(laneData && (laneData.lanes || []).length > 0);
+  const isOnHighway = !!(gpsData && ((distKm != null && distKm <= 3) || hasLanes));
   const ic = road && yourKm ? findNearestIC(road, yourKm) : null;
 
   // 即時重算與測速照相的距離與方位（每次 GPS 更新都會重新計算）
@@ -495,7 +497,8 @@ function HighwayView({
 
   // 目前所在車站 (最靠近 yourKm)
   const selfStation = laneData ? { lanes: laneData.lanes || [], location: laneData.location } : null;
-  const mainLanes = (selfStation?.lanes || []).filter(l => !l.is_shoulder);
+  // 後端在路肩關閉時已濾掉路肩，所以這裡有回就顯示（代表開放）
+  const mainLanes = (selfStation?.lanes || []);
   const advice = laneData?.advice;
 
   // 速度顏色 (使用者)
