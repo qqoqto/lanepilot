@@ -79,6 +79,12 @@ class VDCache:
                 self.last_error = ""
                 self.data_source = "TDX" if tdx_data else "tisvcloud"
 
+                # 首次建立座標索引 + 車道數白名單 (要在 parse 前做，否則第一輪沒上限保護)
+                if not self.location_index.stations:
+                    vd_static = await loop.run_in_executor(None, fetch_vd_static_tdx)
+                    if vd_static:
+                        self.location_index.build(vd_static)
+
                 # 預解析常用路段 (國1 全線)
                 for road in ["1", "1H", "3", "5", "2", "4", "6", "8", "10"]:
                     dirs = ["E", "W"] if road in ("2", "4", "6", "8", "10") else ["N", "S"]
@@ -102,12 +108,6 @@ class VDCache:
 
                 total = sum(len(v) for v in self.stations.values())
                 logger.info(f"VD 快取更新完成: {total} 站, 第 {self.update_count} 次")
-
-                # 首次建立座標索引 (GPS 定位用)
-                if not self.location_index.stations:
-                    vd_static = await loop.run_in_executor(None, fetch_vd_static_tdx)
-                    if vd_static:
-                        self.location_index.build(vd_static)
                 return True
 
             except Exception as e:

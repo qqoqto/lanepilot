@@ -313,6 +313,11 @@ def parse_vd_json(data, road_filter="1", dir_filter=None, km_min=0, km_max=999):
         if not raw_lanes:
             continue
 
+        # 用 VDInfo 白名單蓋掉 VDLive 多報的假車道
+        authoritative_n = _VD_LANE_COUNTS.get(vd_id)
+        if authoritative_n and len(raw_lanes) > authoritative_n:
+            raw_lanes = sorted(raw_lanes, key=lambda x: x[0])[:authoritative_n]
+
         # 動態車道命名
         n_lanes = len(raw_lanes)
         name_map = _lane_names_for_count(n_lanes)
@@ -383,6 +388,27 @@ def _haversine(lat1, lon1, lat2, lon2):
     return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
 
 
+# ---- 真實車道數白名單 (從 TDX VDInfo 靜態資料載入) ----
+# VDLive 即時資料常多報「假車道」，第 6+ 條會被誤命名成「路肩」。
+# 用 VDInfo 的車道數蓋上限，把多餘的雜訊砍掉。
+_VD_LANE_COUNTS: dict = {}
+
+
+def _extract_lane_num(vd: dict):
+    """從 TDX VDInfo 一筆記錄取出車道數，欄位名稱在不同 TDX 規範版本會有差異"""
+    for key in ("LaneNum", "ActualLaneNum", "NumOfLanes"):
+        n = vd.get(key)
+        if isinstance(n, int) and 1 <= n <= 8:
+            return n
+    # 部分版本放在 DetectionLinks[]
+    for dl in vd.get("DetectionLinks", []) or []:
+        for key in ("LaneNum", "ActualLaneNum"):
+            n = dl.get(key)
+            if isinstance(n, int) and 1 <= n <= 8:
+                return n
+    return None
+
+
 class VDLocationIndex:
     """VD 站座標索引, 用 GPS 找最近的 VD 站"""
 
@@ -391,6 +417,7 @@ class VDLocationIndex:
 
     def build(self, vd_static_list):
         self.stations = []
+        _VD_LANE_COUNTS.clear()
         for vd in vd_static_list:
             vdid = vd.get("VDID", "")
             lat = vd.get("PositionLat", 0)
@@ -411,7 +438,11 @@ class VDLocationIndex:
                 continue
             road_name = vd.get("RoadName", f"國{road_code}")
             self.stations.append((vdid, road_code, direction, mileage, lat, lon, road_name))
-        print(f"[INFO] VD 座標索引建立完成: {len(self.stations)} 站")
+            n = _extract_lane_num(vd)
+            if n:
+                _VD_LANE_COUNTS[vdid] = n
+        print(f"[INFO] VD 座標索引建立完成: {len(self.stations)} 站, "
+              f"{len(_VD_LANE_COUNTS)} 站取得車道數白名單")
 
     def find_nearby_road(self, lat, lon):
         if not self.stations:
@@ -540,6 +571,11 @@ def parse_vd_xml(xml_str, road_filter="1", dir_filter=None, km_min=60, km_max=10
 
         if not raw_lanes:
             continue
+
+        # 用 VDInfo 白名單蓋掉 VDLive 多報的假車道
+        authoritative_n = _VD_LANE_COUNTS.get(vd_id)
+        if authoritative_n and len(raw_lanes) > authoritative_n:
+            raw_lanes = sorted(raw_lanes, key=lambda x: x[0])[:authoritative_n]
 
         # 動態車道命名
         n_lanes = len(raw_lanes)
