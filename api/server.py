@@ -139,10 +139,15 @@ cache = VDCache()
 # ============================================================
 
 async def vd_refresh_loop():
-    """每 120 秒抓一次 VD 資料"""
+    """每 180 秒抓一次 VD 資料
+
+    TDX 自己約 60 秒更新一次，180s 等於每 3 次 TDX 更新拿一次。
+    搭配 mobile 每 30s polling，使用者體感的資料延遲約 90 秒平均，
+    對「車道哪條快」這種訊號夠靈敏，但能稍微省 Railway 的 CPU 開銷。
+    """
     while True:
         await cache.refresh()
-        await asyncio.sleep(120)
+        await asyncio.sleep(180)
 
 
 async def camera_refresh_loop():
