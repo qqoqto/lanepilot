@@ -87,6 +87,19 @@ function angleDiffDeg(a, b) {
   return d > 180 ? 360 - d : d;
 }
 
+// GPS 訊號強度：accuracy 越小 (公尺) 訊號越好
+// 回傳 0~4 級 (0=無定位, 4=最強)
+function gpsLevel(accuracy) {
+  if (accuracy == null) return 0;
+  if (accuracy <= 10) return 4;
+  if (accuracy <= 30) return 3;
+  if (accuracy <= 50) return 2;
+  return 1;
+}
+function gpsColor(level) {
+  return ['#8E8E93', '#FF3B30', '#FF9F0A', '#FFD60A', '#30D158'][level];
+}
+
 // =====================================================
 // fetch with retry
 // =====================================================
@@ -138,6 +151,7 @@ export default function DriveScreen() {
   const [userLat, setUserLat] = useState(null);
   const [userLon, setUserLon] = useState(null);
   const [userHeading, setUserHeading] = useState(null);
+  const [userAccuracy, setUserAccuracy] = useState(null);
   const [nearbyCamera, setNearbyCamera] = useState(null);
   const [countdown, setCountdown] = useState(30);
   const [showSettings, setShowSettings] = useState(false);
@@ -150,7 +164,7 @@ export default function DriveScreen() {
       if (status !== 'granted') { setGpsError('GPS 權限未授權'); setLoading(false); return; }
 
       const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
-      const { latitude, longitude, speed: gpsSpeed, altitude: gpsAlt, heading: gpsHeading } = loc.coords;
+      const { latitude, longitude, speed: gpsSpeed, altitude: gpsAlt, heading: gpsHeading, accuracy: gpsAcc } = loc.coords;
       const speedKmh = (gpsSpeed != null && gpsSpeed >= 0) ? Math.round(gpsSpeed * 3.6) : null;
       const altM = (gpsAlt != null && gpsAlt >= 0) ? Math.round(gpsAlt) : null;
       setUserSpeed(speedKmh);
@@ -158,6 +172,7 @@ export default function DriveScreen() {
       setUserLat(latitude);
       setUserLon(longitude);
       if (gpsHeading != null && gpsHeading >= 0) setUserHeading(gpsHeading);
+      if (gpsAcc != null && gpsAcc >= 0) setUserAccuracy(gpsAcc);
 
       initSpeedCameras(latitude, longitude);
 
@@ -213,12 +228,13 @@ export default function DriveScreen() {
       sub = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.High, timeInterval: 1000, distanceInterval: 3 },
         (loc) => {
-          const { latitude, longitude, speed: s, altitude: a, heading: h } = loc.coords;
+          const { latitude, longitude, speed: s, altitude: a, heading: h, accuracy: acc } = loc.coords;
           setUserLat(latitude);
           setUserLon(longitude);
           setUserSpeed((s != null && s >= 0) ? Math.round(s * 3.6) : null);
           setUserAltitude((a != null && a >= 0) ? Math.round(a) : null);
           if (h != null && h >= 0) setUserHeading(h);
+          if (acc != null && acc >= 0) setUserAccuracy(acc);
         }
       );
     })();
@@ -262,7 +278,9 @@ export default function DriveScreen() {
 
       {/* ===== 頂部列 ===== */}
       <View style={s.topRow}>
-        <View style={s.topLeft} />
+        <View style={s.topLeft}>
+          <GpsIndicator accuracy={userAccuracy} />
+        </View>
         <View style={s.topRight}>
           <TouchableOpacity onPress={() => setShowSettings(true)} style={s.topBtn}>
             <Text style={[s.topBtnText, { color: '#636366' }]}>⚙︎</Text>
@@ -299,6 +317,7 @@ export default function DriveScreen() {
             <SpeedometerView
               speed={userSpeed}
               timeStr={timeStr}
+              accuracy={userAccuracy}
             />
           ) : (
             <HighwayView
@@ -357,6 +376,32 @@ export default function DriveScreen() {
           </View>
         </View>
       )}
+    </View>
+  );
+}
+
+// =====================================================
+// GPS 訊號指示器 — 4 根 bar + 誤差數字
+// =====================================================
+function GpsIndicator({ accuracy }) {
+  const level = gpsLevel(accuracy);
+  const color = gpsColor(level);
+  const heights = [5, 8, 11, 14];
+  const label = accuracy != null ? `±${Math.round(accuracy)}m` : '無定位';
+  return (
+    <View style={s.gpsWrap}>
+      <View style={s.gpsBars}>
+        {heights.map((h, i) => (
+          <View
+            key={i}
+            style={[
+              s.gpsBar,
+              { height: h, backgroundColor: i < level ? color : '#2C2C2E' },
+            ]}
+          />
+        ))}
+      </View>
+      <Text style={[s.gpsText, { color }]}>{label}</Text>
     </View>
   );
 }
@@ -425,9 +470,13 @@ function CameraBanner({ camera, distance, userSpeed, isOverSpeed }) {
 // =====================================================
 // 模式 B: 尚未進入國道 — 圓環速度表 (1.jpg)
 // =====================================================
-function SpeedometerView({ speed, timeStr }) {
+function SpeedometerView({ speed, timeStr, accuracy }) {
   const size = 290;
   const borderW = 14;
+  const level = gpsLevel(accuracy);
+  const color = gpsColor(level);
+  // 6 根 bar，從左到右漸高，根據 level (0-4) 點亮對應比例
+  const litCount = Math.round((level / 4) * 6);
   return (
     <View style={s.sbWrap}>
       <Text style={s.sbClock}>{timeStr}</Text>
@@ -451,10 +500,18 @@ function SpeedometerView({ speed, timeStr }) {
       <View style={s.sbGps}>
         <View style={s.sbGpsBars}>
           {[1, 2, 3, 4, 5, 6].map(i => (
-            <View key={i} style={[s.sbGpsBar, { height: 4 + i * 4 }]} />
+            <View
+              key={i}
+              style={[
+                s.sbGpsBar,
+                { height: 4 + i * 4, backgroundColor: i < litCount ? color : '#2C2C2E' },
+              ]}
+            />
           ))}
         </View>
-        <Text style={s.sbGpsText}>G P S</Text>
+        <Text style={[s.sbGpsText, { color }]}>
+          {accuracy != null ? `±${Math.round(accuracy)}m` : 'G P S'}
+        </Text>
       </View>
     </View>
   );
@@ -694,6 +751,12 @@ const s = StyleSheet.create({
     paddingHorizontal: 20, paddingVertical: 8,
   },
   topLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+
+  // ===== GpsIndicator (頂部列) =====
+  gpsWrap: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  gpsBars: { flexDirection: 'row', alignItems: 'flex-end', gap: 2, height: 14 },
+  gpsBar: { width: 3, borderRadius: 1 },
+  gpsText: { fontSize: 11, fontWeight: '600', fontVariant: ['tabular-nums'], letterSpacing: 0.5 },
   topRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   topBtn: { padding: 8 },
   topBtnText: { fontSize: 18 },
