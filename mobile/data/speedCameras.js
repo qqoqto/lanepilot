@@ -183,8 +183,15 @@ export function findNearbyCamera(lat, lon, { road, direction, altitude, yourKm, 
       // 在高架上，跳過同路線但標註為平面的國道照相
       if (isElevated && isHighwayCamera && !isCamElevated && roadFilter && camRoad === roadFilter) continue;
 
-      // 方向過濾（如果照相有方向資訊）
-      if (direction && cam.direction && cam.direction !== direction) continue;
+      // 方向過濾：警政署資料的 direction 是 "南向北"/"北向南"/"東西雙向"/"東向西"/"西向東" 等格式，
+      // 而呼叫端傳進來的是 "北向"/"南向"。用最後一個字（車流去向）比對即可。
+      // - 空字串 或 含「雙向」→ 視為雙向攝影，不過濾
+      // - 否則比對: "南向北"[-1]="北" 對應使用者的 "北向"[0]="北"
+      if (direction && cam.direction && !cam.direction.includes('雙向')) {
+        const targetDir = cam.direction.slice(-1);
+        const userDir = direction.slice(0, 1);
+        if (targetDir !== userDir) continue;
+      }
 
       minDist = dist;
       nearest = {

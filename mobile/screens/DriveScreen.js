@@ -247,8 +247,12 @@ export default function DriveScreen() {
       camAhead = angleDiffDeg(b, userHeading) <= 90;
     }
   }
-  const cameraActive = !!(nearbyCamera && camDist != null && camDist <= 500 && camAhead);
-  const isOverSpeed = cameraActive && userSpeed != null && userSpeed > nearbyCamera.speedLimit;
+  // 三段式警示：
+  //   ≤ 800m + 前方 → 顯示底部 Banner (不打斷主畫面)
+  //   ≤ 300m + 超速 → 升級整頁 CameraView (強制警告)
+  const cameraNear = !!(nearbyCamera && camDist != null && camDist <= 800 && camAhead);
+  const isOverSpeed = cameraNear && userSpeed != null && userSpeed > nearbyCamera.speedLimit;
+  const cameraFullAlert = cameraNear && camDist <= 300 && isOverSpeed;
 
   const timeStr = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
 
@@ -284,7 +288,7 @@ export default function DriveScreen() {
       {/* ===== 主要內容 ===== */}
       {gpsData && !loading && (
         <View style={s.main}>
-          {cameraActive ? (
+          {cameraFullAlert ? (
             <CameraView
               camera={{ ...nearbyCamera, distance: camDist }}
               userSpeed={userSpeed}
@@ -305,6 +309,14 @@ export default function DriveScreen() {
               roadName={roadName}
               dirLabel={dirLabel}
               ic={ic}
+            />
+          )}
+          {cameraNear && !cameraFullAlert && (
+            <CameraBanner
+              camera={nearbyCamera}
+              distance={camDist}
+              userSpeed={userSpeed}
+              isOverSpeed={isOverSpeed}
             />
           )}
         </View>
@@ -346,6 +358,67 @@ export default function DriveScreen() {
         </View>
       )}
     </View>
+  );
+}
+
+// =====================================================
+// 測速提醒 Banner — 800m 內浮在主畫面底部
+// =====================================================
+function CameraBanner({ camera, distance, userSpeed, isOverSpeed }) {
+  const closeRange = distance <= 500;
+  const pulse = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!isOverSpeed) { pulse.setValue(0); return; }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, { toValue: 1, duration: 400, useNativeDriver: false }),
+        Animated.timing(pulse, { toValue: 0, duration: 400, useNativeDriver: false }),
+      ])
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [isOverSpeed]);
+
+  const baseBg = isOverSpeed ? '#3D0D0D' : closeRange ? '#2E0A0A' : '#2A1810';
+  const borderColor = isOverSpeed ? '#FF3B30' : closeRange ? '#FF6B3B' : '#FFB340';
+  const accent = isOverSpeed ? '#FF3B30' : closeRange ? '#FF6B3B' : '#FFB340';
+
+  const bgAnim = isOverSpeed ? pulse.interpolate({
+    inputRange: [0, 1],
+    outputRange: [baseBg, '#5C1010'],
+  }) : baseBg;
+
+  return (
+    <Animated.View style={[s.cbWrap, { backgroundColor: bgAnim, borderColor }]}>
+      {/* 左: 相機 icon */}
+      <View style={s.cbIcon}>
+        <View style={[s.cbIconBox, { borderColor: accent }]}>
+          <View style={s.cbIconLens} />
+        </View>
+      </View>
+
+      {/* 中: 限速 + 距離 */}
+      <View style={s.cbMid}>
+        <View style={[s.cbLimit, { borderColor: accent }]}>
+          <Text style={s.cbLimitNum}>{camera.speedLimit}</Text>
+        </View>
+        <View style={s.cbDist}>
+          <Text style={[s.cbDistNum, { color: accent }]}>{distance}</Text>
+          <Text style={s.cbDistUnit}>m</Text>
+        </View>
+      </View>
+
+      {/* 右: 你的速度（僅 ≤ 500m 顯示） */}
+      {closeRange && userSpeed != null && (
+        <View style={s.cbUser}>
+          <Text style={[s.cbUserNum, { color: isOverSpeed ? '#FF3B30' : '#FFFFFF' }]}>
+            {userSpeed}
+          </Text>
+          <Text style={s.cbUserUnit}>km/h</Text>
+        </View>
+      )}
+    </Animated.View>
   );
 }
 
@@ -632,6 +705,40 @@ const s = StyleSheet.create({
   retryText: { color: '#0A84FF', fontSize: 15, fontWeight: '600' },
 
   main: { flex: 1, width: '100%' },
+
+  // ===== CameraBanner (測速提醒) =====
+  cbWrap: {
+    position: 'absolute',
+    left: 14, right: 14, bottom: 14,
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 12, paddingHorizontal: 14,
+    borderRadius: 16, borderWidth: 2,
+    gap: 12,
+  },
+  cbIcon: { width: 44, alignItems: 'center' },
+  cbIconBox: {
+    width: 36, height: 28, borderRadius: 4,
+    borderWidth: 2,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: '#0A0A10',
+  },
+  cbIconLens: {
+    width: 12, height: 12, borderRadius: 6,
+    backgroundColor: '#FFFFFF',
+  },
+  cbMid: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  cbLimit: {
+    width: 46, height: 46, borderRadius: 23,
+    borderWidth: 3, backgroundColor: '#FFFFFF',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  cbLimitNum: { color: '#000000', fontSize: 20, fontWeight: '900' },
+  cbDist: { flexDirection: 'row', alignItems: 'baseline', gap: 2 },
+  cbDistNum: { fontSize: 30, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  cbDistUnit: { color: '#FFFFFF', opacity: 0.7, fontSize: 14, fontWeight: '600' },
+  cbUser: { alignItems: 'flex-end', minWidth: 72 },
+  cbUserNum: { fontSize: 30, fontWeight: '800', lineHeight: 32, fontVariant: ['tabular-nums'] },
+  cbUserUnit: { color: '#8E8E93', fontSize: 11, fontWeight: '500' },
 
   // ===== SpeedometerView =====
   sbWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingTop: 10 },
