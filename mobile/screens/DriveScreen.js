@@ -6,6 +6,7 @@ import * as Location from 'expo-location';
 import { API_BASE } from '../constants';
 import { useSettings } from '../SettingsContext';
 import { useTrajectoryConsent } from '../state/trajectoryConsent';
+import { useTrajectoryUploader } from '../state/trajectoryUploader';
 import { findNearbyCamera, initSpeedCameras, getDistanceMeters } from '../data/speedCameras';
 
 const PRIVACY_URL = 'https://qqoqto.github.io/lanepilot/privacy-policy.html';
@@ -148,6 +149,7 @@ export default function DriveScreen() {
     acknowledge: ackTrajectory,
     setEnabled: setTrajEnabled,
   } = useTrajectoryConsent();
+  const { addPoint: addTrajectoryPoint } = useTrajectoryUploader();
 
   // --- 資料 state ---
   const [gpsData, setGpsData] = useState(null);
@@ -244,6 +246,7 @@ export default function DriveScreen() {
           setUserAltitude((a != null && a >= 0) ? Math.round(a) : null);
           if (h != null && h >= 0) setUserHeading(h);
           if (acc != null && acc >= 0) setUserAccuracy(acc);
+          addTrajectoryPoint(loc.coords);
         }
       );
     })();
