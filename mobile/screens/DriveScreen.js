@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import {
-  StyleSheet, Text, View, TouchableOpacity, Animated, Dimensions, Linking, ScrollView,
+  StyleSheet, Text, View, TouchableOpacity, Animated, Dimensions, Linking, ScrollView, Switch,
 } from 'react-native';
 import * as Location from 'expo-location';
 import { API_BASE } from '../constants';
 import { useSettings } from '../SettingsContext';
+import { useTrajectoryConsent } from '../state/trajectoryConsent';
 import { findNearbyCamera, initSpeedCameras, getDistanceMeters } from '../data/speedCameras';
+
+const PRIVACY_URL = 'https://qqoqto.github.io/lanepilot/privacy-policy.html';
 
 const { width: SW } = Dimensions.get('window');
 
@@ -139,6 +142,12 @@ function laneColor(speed) {
 // =====================================================
 export default function DriveScreen() {
   const { sensitivity, setSensitivity } = useSettings();
+  const {
+    acknowledged: trajAck,
+    enabled: trajEnabled,
+    acknowledge: ackTrajectory,
+    setEnabled: setTrajEnabled,
+  } = useTrajectoryConsent();
 
   // --- 資料 state ---
   const [gpsData, setGpsData] = useState(null);
@@ -369,10 +378,44 @@ export default function DriveScreen() {
             <Text style={s.settingHint}>速差 ≥ {sensitivity} km/h 才建議切換</Text>
 
             <View style={s.settingDivider} />
-            <TouchableOpacity onPress={() => Linking.openURL('https://qqoqto.github.io/lanepilot/privacy-policy.html')}>
+            <View style={s.settingRow}>
+              <Text style={s.settingLabel}>匿名軌跡蒐集</Text>
+              <Switch
+                value={trajEnabled}
+                onValueChange={setTrajEnabled}
+                trackColor={{ false: '#2C2C2E', true: '#5E5CE6' }}
+                thumbColor="#FFFFFF"
+              />
+            </View>
+            <Text style={s.settingHint}>協助改善車道級路況推算,可隨時關閉</Text>
+
+            <View style={s.settingDivider} />
+            <TouchableOpacity onPress={() => Linking.openURL(PRIVACY_URL)}>
               <Text style={s.settingLink}>隱私權政策</Text>
             </TouchableOpacity>
             <Text style={s.settingCredit}>路道通 LanePilot v1.0{'\n'}資料來源：交通部高速公路局</Text>
+          </View>
+        </View>
+      )}
+
+      {/* ===== 首次啟動：軌跡蒐集告知 ===== */}
+      {trajAck === false && (
+        <View style={s.settingsOverlay}>
+          <View style={s.settingsCard}>
+            <Text style={s.consentTitle}>關於資料蒐集</Text>
+            <Text style={s.consentBody}>
+              為了改善車道級路況推算,路道通會匿名蒐集你的 GPS 軌跡(位置、時間、速度)。
+              {'\n\n'}
+              我們<Text style={s.consentBold}>不會</Text>蒐集姓名、電話或其他可識別個人的資訊。
+              {'\n\n'}
+              資料保留 90 天後自動刪除。你可以隨時在設定中關閉此功能。
+            </Text>
+            <TouchableOpacity onPress={() => Linking.openURL(PRIVACY_URL)}>
+              <Text style={s.consentLink}>查看完整隱私權政策</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={s.consentBtn} onPress={ackTrajectory}>
+              <Text style={s.consentBtnText}>我知道了</Text>
+            </TouchableOpacity>
           </View>
         </View>
       )}
@@ -1053,4 +1096,15 @@ const s = StyleSheet.create({
   settingDivider: { height: 0.5, backgroundColor: '#2C2C2E', marginBottom: 16 },
   settingLink: { color: '#64D2FF', fontSize: 14, marginBottom: 16 },
   settingCredit: { color: '#3A3A3C', fontSize: 11, textAlign: 'center', lineHeight: 18 },
+
+  // 首次啟動 — 軌跡蒐集告知
+  consentTitle: { color: '#FFFFFF', fontSize: 20, fontWeight: '600', marginBottom: 16 },
+  consentBody: { color: '#E5E5EA', fontSize: 14, lineHeight: 22, marginBottom: 16 },
+  consentBold: { color: '#FFFFFF', fontWeight: '600' },
+  consentLink: { color: '#64D2FF', fontSize: 13, marginBottom: 20 },
+  consentBtn: {
+    backgroundColor: '#5E5CE6', borderRadius: 12,
+    paddingVertical: 14, alignItems: 'center',
+  },
+  consentBtnText: { color: '#FFFFFF', fontSize: 16, fontWeight: '600' },
 });
