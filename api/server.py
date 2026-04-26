@@ -21,6 +21,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from typing import List, Optional
 
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -32,6 +34,7 @@ from engine.lane_advisor import (
     fetch_vd_static_tdx, VDLocationIndex,
     estimate_current_lane
 )
+from api import trajectory_store
 
 logger = logging.getLogger("lanepilot")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
@@ -161,6 +164,7 @@ async def camera_refresh_loop():
 async def lifespan(app: FastAPI):
     """應用啟動/關閉生命週期"""
     logger.info("LanePilot API 啟動中...")
+    trajectory_store.init_db()
     # 不等第一次抓取完成, 直接啟動, 背景排程會處理
     vd_task = asyncio.create_task(vd_refresh_loop())
     cam_task = asyncio.create_task(camera_refresh_loop())
@@ -600,3 +604,37 @@ async def speed_cameras(
         "data_time": camera_cache.last_update.isoformat() if camera_cache.last_update else None,
         "source": "內政部警政署測速執法設置點"
     }
+
+
+# ============================================================
+# Phase 0: 軌跡蒐集 (純收資料,不分析)
+# ============================================================
+
+class _TrajectoryPoint(BaseModel):
+    captured_at: int  # unix epoch ms
+    lat: float
+    lon: float
+    speed: Optional[float] = None     # km/h
+    heading: Optional[float] = None   # degrees, 0=北
+    accuracy: Optional[float] = None  # meters
+
+
+class _TrajectoryBatch(BaseModel):
+    session_id: str = Field(..., min_length=1, max_length=64)
+    points: List[_TrajectoryPoint] = Field(..., min_length=1, max_length=200)
+
+
+@app.post("/api/v1/trajectories")
+def upload_trajectories(batch: _TrajectoryBatch):
+    """匿名軌跡批次上傳。需使用者在 App 設定中明確開啟。"""
+    accepted, rejected = trajectory_store.insert_batch(
+        batch.session_id,
+        [p.model_dump() for p in batch.points],
+    )
+    return {"accepted": accepted, "rejected": rejected}
+
+
+@app.get("/api/v1/trajectories/stats")
+def trajectory_stats():
+    """累積資料量,給開發/監控用。"""
+    return trajectory_store.stats()

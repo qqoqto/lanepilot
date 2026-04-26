@@ -29,3 +29,6 @@ test_vd.xml
 
 # Claude Code
 .claude/
+
+# Phase 0 軌跡 SQLite（不該進 repo）
+data/
