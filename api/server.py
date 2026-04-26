@@ -160,6 +160,23 @@ async def camera_refresh_loop():
         await asyncio.sleep(86400)  # 24 小時
 
 
+TRAJECTORY_RETENTION_DAYS = 90
+
+
+async def trajectory_retention_loop():
+    """每 24 小時砍掉 90 天前的軌跡 (對應 privacy policy 寫的保留期間)"""
+    while True:
+        try:
+            deleted = await asyncio.to_thread(
+                trajectory_store.purge_older_than, TRAJECTORY_RETENTION_DAYS
+            )
+            if deleted:
+                logger.info(f"軌跡 retention: 刪除 {deleted} 筆 {TRAJECTORY_RETENTION_DAYS} 天前的點")
+        except Exception as e:
+            logger.error(f"軌跡 retention 失敗: {e}")
+        await asyncio.sleep(86400)  # 24 小時
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """應用啟動/關閉生命週期"""
@@ -168,10 +185,12 @@ async def lifespan(app: FastAPI):
     # 不等第一次抓取完成, 直接啟動, 背景排程會處理
     vd_task = asyncio.create_task(vd_refresh_loop())
     cam_task = asyncio.create_task(camera_refresh_loop())
-    logger.info("背景排程已啟動: VD (每 120 秒), 測速照相 (每 24 小時)")
+    traj_task = asyncio.create_task(trajectory_retention_loop())
+    logger.info("背景排程已啟動: VD (每 120 秒), 測速照相 (每 24 小時), 軌跡 retention (每 24 小時)")
     yield
     vd_task.cancel()
     cam_task.cancel()
+    traj_task.cancel()
     logger.info("LanePilot API 關閉")
 
 
